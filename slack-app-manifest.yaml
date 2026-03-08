@@ -1,0 +1,42 @@
+display_information:
+  name: Zoe
+  description: AI-powered personal assistant that surfaces your highest-priority actions from Slack, Gmail, and Calendar.
+  background_color: "#6C5CE7"
+  long_description: |
+    Zoe connects to your Slack workspace to monitor channels and threads you care about.
+    She classifies messages by urgency, identifies action items, and surfaces them alongside
+    your email and calendar signals — so you always know what needs attention right now.
+
+features:
+  bot_user:
+    display_name: Zoe
+    always_online: true
+
+oauth_config:
+  redirect_urls:
+    - https://YOUR-DOMAIN.com/api/integrations/slack/callback
+  scopes:
+    bot:
+      - channels:history
+      - channels:read
+      - chat:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - mpim:history
+      - mpim:read
+      - users:read
+      - users:read.email
+
+settings:
+  event_subscriptions:
+    request_url: https://YOUR-DOMAIN.com/api/signals/slack
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
