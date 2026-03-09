@@ -4,6 +4,7 @@ import {
   createServerSupabaseClient,
   createServiceRoleClient,
 } from "@/lib/supabase/server";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 export async function POST(request: Request) {
   const supabase = await createServerSupabaseClient();
@@ -51,14 +52,15 @@ export async function POST(request: Request) {
 
   const priceId =
     interval === "yearly" ? PLANS.individual.yearly : PLANS.individual.monthly;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
   const session = await getStripe().checkout.sessions.create({
     customer: customer.stripe_customer_id,
     mode: "subscription",
     payment_method_types: ["card"],
     line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${process.env.NEXT_PUBLIC_APP_URL}/settings?billing=success`,
-    cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/settings?billing=canceled`,
+    success_url: getAbsoluteAppUrl(appUrl, "/settings?billing=success"),
+    cancel_url: getAbsoluteAppUrl(appUrl, "/settings?billing=canceled"),
     metadata: { user_id: user.id },
   });
 

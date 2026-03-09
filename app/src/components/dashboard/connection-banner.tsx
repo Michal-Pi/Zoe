@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { withBasePath } from "@/lib/base-path";
 
 interface ConnectionBannerProps {
   hasCalendar: boolean;
@@ -35,7 +36,7 @@ export function ConnectionBanner({
           </p>
         </div>
         <Button size="sm" asChild>
-          <a href="/settings">Connect</a>
+          <a href={withBasePath("/settings")}>Connect</a>
         </Button>
       </CardContent>
     </Card>

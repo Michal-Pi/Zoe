@@ -1,23 +1,23 @@
 {
   "crons": [
     {
-      "path": "/api/cron/sync",
+      "path": "/zoe/api/cron/sync",
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron/classify",
+      "path": "/zoe/api/cron/classify",
       "schedule": "*/2 * * * *"
     },
     {
-      "path": "/api/cron/score",
+      "path": "/zoe/api/cron/score",
       "schedule": "*/3 * * * *"
     },
     {
-      "path": "/api/cron/drafts",
+      "path": "/zoe/api/cron/drafts",
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron/metrics",
+      "path": "/zoe/api/cron/metrics",
       "schedule": "0 1 * * *"
     }
   ]

@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { exchangeCodeForTokens } from "@/lib/integrations/google-auth";
 import { syncCalendarEvents } from "@/lib/integrations/google-calendar";
 import { syncGmailMessages } from "@/lib/integrations/gmail";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -13,12 +14,17 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      `${origin}/settings?error=${encodeURIComponent(error)}`
+      getAbsoluteAppUrl(
+        origin,
+        `/settings?error=${encodeURIComponent(error)}`
+      )
     );
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(`${origin}/settings?error=missing_params`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=missing_params")
+    );
   }
 
   // Verify the user from state
@@ -28,7 +34,9 @@ export async function GET(request: NextRequest) {
       Buffer.from(state, "base64url").toString("utf-8")
     );
   } catch {
-    return NextResponse.redirect(`${origin}/settings?error=invalid_state`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=invalid_state")
+    );
   }
 
   // Verify the logged-in user matches the state
@@ -38,7 +46,9 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   if (!user || user.id !== stateData.userId) {
-    return NextResponse.redirect(`${origin}/settings?error=user_mismatch`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=user_mismatch")
+    );
   }
 
   try {
@@ -56,10 +66,15 @@ export async function GET(request: NextRequest) {
     });
 
     return NextResponse.redirect(
-      `${origin}/settings?success=google&email=${encodeURIComponent(email)}`
+      getAbsoluteAppUrl(
+        origin,
+        `/settings?success=google&email=${encodeURIComponent(email)}`
+      )
     );
   } catch (err) {
     console.error("Google OAuth callback error:", err);
-    return NextResponse.redirect(`${origin}/settings?error=token_exchange`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=token_exchange")
+    );
   }
 }

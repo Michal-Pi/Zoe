@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
@@ -11,10 +12,12 @@ const SCOPES = [
 ];
 
 function getOAuthClient() {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/google/callback`
+    getAbsoluteAppUrl(appUrl, "/api/integrations/google/callback")
   );
 }
 

@@ -5,10 +5,11 @@ import { DefaultChatTransport } from "ai";
 import { useRef, useEffect, useState, useMemo } from "react";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { ChatInput } from "@/components/chat/chat-input";
+import { withBasePath } from "@/lib/base-path";
 
 export default function ChatPage() {
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: "/api/chat" }),
+    () => new DefaultChatTransport({ api: withBasePath("/api/chat") }),
     []
   );
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { withBasePath } from "@/lib/base-path";
 import { createClient } from "@/lib/supabase/client";
 
 export default function PaywallPage() {
@@ -17,10 +18,10 @@ export default function PaywallPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/billing/checkout", {
+      const res = await fetch(withBasePath("/api/billing/checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({ interval: plan }),
       });
 
       const json = await res.json();
@@ -31,8 +32,8 @@ export default function PaywallPage() {
         return;
       }
 
-      if (json.data?.url) {
-        window.location.href = json.data.url;
+      if (json.url) {
+        window.location.href = json.url;
       }
     } catch {
       setError("Network error. Please try again.");

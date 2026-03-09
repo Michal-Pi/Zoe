@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { withBasePath } from "@/lib/base-path";
 import { createClient } from "@/lib/supabase/client";
 
 const STEPS = ["welcome", "google", "slack", "priorities", "hours", "done"] as const;
@@ -18,8 +19,8 @@ export default function OnboardingPage() {
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone
   );
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [slackConnected, setSlackConnected] = useState(false);
+  const googleConnected = false;
+  const slackConnected = false;
   const [saving, setSaving] = useState(false);
   const router = useRouter();
   const supabase = createClient();
@@ -39,11 +40,11 @@ export default function OnboardingPage() {
 
   const connectGoogle = () => {
     // Redirect to Google OAuth — will return to settings after
-    window.location.href = "/api/integrations/google/connect";
+    window.location.href = withBasePath("/api/integrations/google/connect");
   };
 
   const connectSlack = () => {
-    window.location.href = "/api/integrations/slack/connect";
+    window.location.href = withBasePath("/api/integrations/slack/connect");
   };
 
   const savePrioritiesAndHours = async () => {

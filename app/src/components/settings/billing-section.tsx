@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useSubscription } from "@/hooks/use-subscription";
 import { Skeleton } from "@/components/ui/skeleton";
+import { withBasePath } from "@/lib/base-path";
 
 function getStatusColor(status: string): string {
   switch (status) {
@@ -44,7 +45,7 @@ export function BillingSection() {
   const handleCheckout = async (interval: "monthly" | "yearly") => {
     setCheckoutLoading(true);
     try {
-      const res = await fetch("/api/billing/checkout", {
+      const res = await fetch(withBasePath("/api/billing/checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ interval }),
@@ -66,7 +67,9 @@ export function BillingSection() {
   const handlePortal = async () => {
     setPortalLoading(true);
     try {
-      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const res = await fetch(withBasePath("/api/billing/portal"), {
+        method: "POST",
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `Portal failed (${res.status})`);

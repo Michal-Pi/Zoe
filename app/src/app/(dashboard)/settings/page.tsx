@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { BillingSection } from "@/components/settings/billing-section";
+import { withBasePath } from "@/lib/base-path";
 
 interface Connection {
   id: string;
@@ -115,7 +116,7 @@ function SettingsContent() {
           connected={!!googleConnection}
           email={googleConnection?.email ?? undefined}
           lastSyncAt={googleConnection?.last_sync_at ?? undefined}
-          connectUrl="/api/integrations/google/connect"
+          connectUrl={withBasePath("/api/integrations/google/connect")}
           loading={loading}
         />
 
@@ -125,7 +126,7 @@ function SettingsContent() {
           connected={!!slackConnection}
           email={slackConnection?.email ?? undefined}
           lastSyncAt={slackConnection?.last_sync_at ?? undefined}
-          connectUrl="/api/integrations/slack/connect"
+          connectUrl={withBasePath("/api/integrations/slack/connect")}
           loading={loading}
         />
       </section>
@@ -320,11 +321,10 @@ const themeOptions = [
 
 function AppearanceSection() {
   const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const mounted = theme !== undefined;
 
   useEffect(() => {
-    setMounted(true);
     async function loadUser() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();

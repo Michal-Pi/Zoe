@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 import crypto from "crypto";
 
 const SLACK_SCOPES = [
@@ -25,6 +26,8 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
   const state = Buffer.from(
     JSON.stringify({
       userId: user.id,
@@ -35,7 +38,10 @@ export async function GET() {
   const params = new URLSearchParams({
     client_id: process.env.SLACK_CLIENT_ID!,
     scope: SLACK_SCOPES,
-    redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/slack/callback`,
+    redirect_uri: getAbsoluteAppUrl(
+      appUrl,
+      "/api/integrations/slack/callback"
+    ),
     state,
   });
 

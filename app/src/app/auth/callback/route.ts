@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -35,10 +36,10 @@ export async function GET(request: Request) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(`${appUrl}${next}`);
+      return NextResponse.redirect(getAbsoluteAppUrl(appUrl, next));
     }
   }
 
   // Return to login with error
-  return NextResponse.redirect(`${appUrl}/login`);
+  return NextResponse.redirect(getAbsoluteAppUrl(appUrl, "/login"));
 }

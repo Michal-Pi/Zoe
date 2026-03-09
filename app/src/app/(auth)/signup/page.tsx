@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -29,7 +30,10 @@ export default function SignupPage() {
         data: {
           full_name: fullName,
         },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: getAbsoluteAppUrl(
+          window.location.origin,
+          "/auth/callback"
+        ),
       },
     });
 
@@ -53,7 +57,7 @@ export default function SignupPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: getAbsoluteAppUrl(window.location.origin, "/auth/callback"),
       },
     });
 

@@ -1,4 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 const SLACK_API = "https://slack.com/api";
 
@@ -26,6 +27,8 @@ export async function exchangeSlackCode(
   code: string,
   userId: string
 ): Promise<{ connectionId: string; teamName: string }> {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
   const response = await fetch(`${SLACK_API}/oauth.v2.access`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -33,7 +36,10 @@ export async function exchangeSlackCode(
       client_id: process.env.SLACK_CLIENT_ID!,
       client_secret: process.env.SLACK_CLIENT_SECRET!,
       code,
-      redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/slack/callback`,
+      redirect_uri: getAbsoluteAppUrl(
+        appUrl,
+        "/api/integrations/slack/callback"
+      ),
     }),
   });
 

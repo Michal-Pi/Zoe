@@ -4,6 +4,7 @@ import {
   createServerSupabaseClient,
   createServiceRoleClient,
 } from "@/lib/supabase/server";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 export async function POST() {
   const supabase = await createServerSupabaseClient();
@@ -14,6 +15,8 @@ export async function POST() {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
   const serviceClient = await createServiceRoleClient();
 
@@ -32,7 +35,7 @@ export async function POST() {
 
   const session = await getStripe().billingPortal.sessions.create({
     customer: customer.stripe_customer_id,
-    return_url: `${process.env.NEXT_PUBLIC_APP_URL}/settings`,
+    return_url: getAbsoluteAppUrl(appUrl, "/settings"),
   });
 
   return NextResponse.json({ url: session.url });

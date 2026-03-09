@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { exchangeSlackCode } from "@/lib/integrations/slack";
+import { getAbsoluteAppUrl } from "@/lib/base-path";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -11,12 +12,17 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      `${origin}/settings?error=${encodeURIComponent(error)}`
+      getAbsoluteAppUrl(
+        origin,
+        `/settings?error=${encodeURIComponent(error)}`
+      )
     );
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(`${origin}/settings?error=missing_params`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=missing_params")
+    );
   }
 
   let stateData: { userId: string };
@@ -25,7 +31,9 @@ export async function GET(request: NextRequest) {
       Buffer.from(state, "base64url").toString("utf-8")
     );
   } catch {
-    return NextResponse.redirect(`${origin}/settings?error=invalid_state`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=invalid_state")
+    );
   }
 
   const supabase = await createServerSupabaseClient();
@@ -34,16 +42,23 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   if (!user || user.id !== stateData.userId) {
-    return NextResponse.redirect(`${origin}/settings?error=user_mismatch`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=user_mismatch")
+    );
   }
 
   try {
     const { teamName } = await exchangeSlackCode(code, user.id);
     return NextResponse.redirect(
-      `${origin}/settings?success=slack&email=${encodeURIComponent(teamName)}`
+      getAbsoluteAppUrl(
+        origin,
+        `/settings?success=slack&email=${encodeURIComponent(teamName)}`
+      )
     );
   } catch (err) {
     console.error("Slack OAuth callback error:", err);
-    return NextResponse.redirect(`${origin}/settings?error=slack_auth`);
+    return NextResponse.redirect(
+      getAbsoluteAppUrl(origin, "/settings?error=slack_auth")
+    );
   }
 }

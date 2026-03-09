@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { stripBasePath, withBasePath } from "@/lib/base-path";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -15,9 +16,7 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            request.cookies.set(name, value)
-          );
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
           supabaseResponse = NextResponse.next({
             request,
           });
@@ -33,7 +32,10 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { pathname } = request.nextUrl;
+  const pathname = stripBasePath(
+    request.nextUrl.pathname,
+    request.nextUrl.basePath
+  );
 
   // Public routes that don't require auth
   const publicRoutes = ["/login", "/signup", "/auth/callback", "/paywall", "/forgot-password"];
@@ -50,14 +52,14 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = withBasePath("/login");
     return NextResponse.redirect(url);
   }
 
   // If user exists and trying to access login/signup, redirect to dashboard
   if (user && (pathname === "/login" || pathname === "/signup")) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = withBasePath("/dashboard");
     return NextResponse.redirect(url);
   }
 
@@ -88,7 +90,7 @@ export async function updateSession(request: NextRequest) {
         });
       } else if (profile && !profile.onboarding_completed) {
         const url = request.nextUrl.clone();
-        url.pathname = "/onboarding";
+        url.pathname = withBasePath("/onboarding");
         return NextResponse.redirect(url);
       }
     }

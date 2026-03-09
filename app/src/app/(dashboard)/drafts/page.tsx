@@ -8,6 +8,7 @@ import { DraftReviewPanel } from "@/components/drafts/draft-review-panel";
 import { useDrafts, useUpdateDraft } from "@/hooks/use-drafts";
 import { toast } from "sonner";
 import type { DraftReply } from "@/domain/drafts";
+import { withBasePath } from "@/lib/base-path";
 
 export default function DraftsPage() {
   const [selectedDraft, setSelectedDraft] = useState<DraftReply | null>(null);
@@ -18,7 +19,7 @@ export default function DraftsPage() {
 
   const handleSend = async (draft: DraftReply) => {
     try {
-      const res = await fetch("/api/drafts/send", {
+      const res = await fetch(withBasePath("/api/drafts/send"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
