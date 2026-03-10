@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { stripBasePath, withBasePath } from "@/lib/base-path";
+import { stripBasePath } from "@/lib/base-path";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -52,14 +52,14 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const url = request.nextUrl.clone();
-    url.pathname = withBasePath("/login");
+    url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
   // If user exists and trying to access login/signup, redirect to dashboard
   if (user && (pathname === "/login" || pathname === "/signup")) {
     const url = request.nextUrl.clone();
-    url.pathname = withBasePath("/dashboard");
+    url.pathname = "/dashboard";
     return NextResponse.redirect(url);
   }
 
@@ -90,7 +90,7 @@ export async function updateSession(request: NextRequest) {
         });
       } else if (profile && !profile.onboarding_completed) {
         const url = request.nextUrl.clone();
-        url.pathname = withBasePath("/onboarding");
+        url.pathname = "/onboarding";
         return NextResponse.redirect(url);
       }
     }
