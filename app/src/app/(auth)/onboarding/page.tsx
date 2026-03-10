@@ -1,17 +1,21 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { withBasePath } from "@/lib/base-path";
 import { createClient } from "@/lib/supabase/client";
+import { useHasConnection } from "@/hooks/use-connections";
 
 const STEPS = ["welcome", "google", "slack", "priorities", "hours", "done"] as const;
 type Step = (typeof STEPS)[number];
 
 export default function OnboardingPage() {
+  const searchParams = useSearchParams();
+  const requestedStep = searchParams.get("step");
+  const success = searchParams.get("success");
   const [step, setStep] = useState<Step>("welcome");
   const [priorities, setPriorities] = useState(["", "", ""]);
   const [workHoursStart, setWorkHoursStart] = useState("09:00");
@@ -19,11 +23,29 @@ export default function OnboardingPage() {
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone
   );
-  const googleConnected = false;
-  const slackConnected = false;
+  const googleConnected = useHasConnection("google");
+  const slackConnected = useHasConnection("slack");
   const [saving, setSaving] = useState(false);
   const router = useRouter();
   const supabase = createClient();
+
+  useEffect(() => {
+    if (requestedStep && STEPS.includes(requestedStep as Step)) {
+      setStep(requestedStep as Step);
+    }
+  }, [requestedStep]);
+
+  useEffect(() => {
+    if (success === "google" && googleConnected) {
+      setStep("slack");
+    }
+  }, [googleConnected, success]);
+
+  useEffect(() => {
+    if (success === "slack" && slackConnected) {
+      setStep("priorities");
+    }
+  }, [slackConnected, success]);
 
   const stepIndex = STEPS.indexOf(step);
   const progress = ((stepIndex + 1) / STEPS.length) * 100;
@@ -39,12 +61,15 @@ export default function OnboardingPage() {
   };
 
   const connectGoogle = () => {
-    // Redirect to Google OAuth — will return to settings after
-    window.location.href = withBasePath("/api/integrations/google/connect");
+    window.location.href = withBasePath(
+      "/api/integrations/google/connect?next=/onboarding?step=google"
+    );
   };
 
   const connectSlack = () => {
-    window.location.href = withBasePath("/api/integrations/slack/connect");
+    window.location.href = withBasePath(
+      "/api/integrations/slack/connect?next=/onboarding?step=slack"
+    );
   };
 
   const savePrioritiesAndHours = async () => {

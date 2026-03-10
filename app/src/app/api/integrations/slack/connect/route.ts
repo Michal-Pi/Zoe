@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { getAbsoluteAppUrl } from "@/lib/base-path";
 import crypto from "crypto";
@@ -16,7 +16,15 @@ const SLACK_SCOPES = [
   "users:read.email",
 ].join(",");
 
-export async function GET() {
+function sanitizeReturnTo(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/settings";
+  }
+
+  return value;
+}
+
+export async function GET(request: NextRequest) {
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
@@ -32,6 +40,7 @@ export async function GET() {
     JSON.stringify({
       userId: user.id,
       nonce: crypto.randomBytes(16).toString("hex"),
+      returnTo: sanitizeReturnTo(request.nextUrl.searchParams.get("next")),
     })
   ).toString("base64url");
 
