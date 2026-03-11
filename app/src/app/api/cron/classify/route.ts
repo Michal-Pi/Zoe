@@ -32,6 +32,7 @@ export async function GET(request: NextRequest) {
         classified: 0,
         errors: 0,
         error: err instanceof Error ? err.message : String(err),
+        errorDetails: [],
       });
     }
   }

@@ -17,10 +17,16 @@ import {
 
 const BATCH_SIZE = 15;
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 /** Classify unclassified signals for a user */
 export async function classifySignals(userId: string): Promise<{
   classified: number;
   errors: number;
+  errorDetails: string[];
 }> {
   const supabase = await createServiceRoleClient();
 
@@ -35,7 +41,13 @@ export async function classifySignals(userId: string): Promise<{
     .order("received_at", { ascending: false })
     .limit(BATCH_SIZE * 3); // Process up to 3 batches per run
 
-  if (error || !signals?.length) return { classified: 0, errors: 0 };
+  if (error || !signals?.length) {
+    return {
+      classified: 0,
+      errors: 0,
+      errorDetails: error ? [getErrorMessage(error)] : [],
+    };
+  }
 
   // Fetch user's strategic priorities
   const { data: priorities } = await supabase
@@ -51,6 +63,7 @@ export async function classifySignals(userId: string): Promise<{
 
   let classified = 0;
   let errors = 0;
+  const errorDetails: string[] = [];
 
   // Process in batches
   for (let i = 0; i < signals.length; i += BATCH_SIZE) {
@@ -67,9 +80,22 @@ export async function classifySignals(userId: string): Promise<{
       if (redis) {
         for (const signal of batch) {
           const cacheKey = `classify:${signal.source}:${signal.id}`;
-          const cached = await redis.get<
-            BatchClassification["classifications"][number]
-          >(cacheKey);
+          let cached;
+          try {
+            cached = await redis.get<
+              BatchClassification["classifications"][number]
+            >(cacheKey);
+          } catch (err) {
+            const message = `redis.get failed for ${cacheKey}: ${getErrorMessage(err)}`;
+            console.error("Classification cache read error:", {
+              userId,
+              signalId: signal.id,
+              cacheKey,
+              error: getErrorMessage(err),
+            });
+            errorDetails.push(message);
+            throw err;
+          }
           if (cached) {
             cachedResults.set(signal.id, cached);
           } else {
@@ -99,11 +125,24 @@ export async function classifySignals(userId: string): Promise<{
           priorityTitles
         );
 
-        const { object } = await generateObject({
-          model: models.fast,
-          schema: batchClassificationSchema,
-          prompt,
-        });
+        let object;
+        try {
+          ({ object } = await generateObject({
+            model: models.fast,
+            schema: batchClassificationSchema,
+            prompt,
+          }));
+        } catch (err) {
+          const message = `generateObject failed for batch starting ${batch[0]?.id}: ${getErrorMessage(err)}`;
+          console.error("Classification model error:", {
+            userId,
+            batchSignalIds: batch.map((signal) => signal.id),
+            uncachedSignalIds: uncachedSignals.map((signal) => signal.id),
+            error: getErrorMessage(err),
+          });
+          errorDetails.push(message);
+          throw err;
+        }
 
         llmClassifications = object.classifications;
 
@@ -115,7 +154,19 @@ export async function classifySignals(userId: string): Promise<{
             );
             if (signal) {
               const cacheKey = `classify:${signal.source}:${signal.id}`;
-              await redis.set(cacheKey, classification, { ex: CACHE_TTL });
+              try {
+                await redis.set(cacheKey, classification, { ex: CACHE_TTL });
+              } catch (err) {
+                const message = `redis.set failed for ${cacheKey}: ${getErrorMessage(err)}`;
+                console.error("Classification cache write error:", {
+                  userId,
+                  signalId: signal.id,
+                  cacheKey,
+                  error: getErrorMessage(err),
+                });
+                errorDetails.push(message);
+                throw err;
+              }
             }
           }
         }
@@ -144,6 +195,13 @@ export async function classifySignals(userId: string): Promise<{
           .eq("user_id", userId);
 
         if (updateError) {
+          const message = `signal update failed for ${signal_id}: ${getErrorMessage(updateError)}`;
+          console.error("Classification signal update error:", {
+            userId,
+            signalId: signal_id,
+            error: getErrorMessage(updateError),
+          });
+          errorDetails.push(message);
           errors++;
         } else {
           classified++;
@@ -153,12 +211,16 @@ export async function classifySignals(userId: string): Promise<{
       // Apply Gmail labels to classified email signals
       await applyGmailLabels(userId, batch, allClassifications, supabase);
     } catch (err) {
-      console.error("Classification batch error:", err);
+      console.error("Classification batch error:", {
+        userId,
+        batchSignalIds: batch.map((signal) => signal.id),
+        error: getErrorMessage(err),
+      });
       errors += batch.length;
     }
   }
 
-  return { classified, errors };
+  return { classified, errors, errorDetails: errorDetails.slice(0, 10) };
 }
 
 /** Apply Zoe Gmail labels to classified email signals (best-effort, non-blocking) */
