@@ -133,6 +133,10 @@ function ProcessingStatusCard({
   if (isProcessingNow) {
     title = "Processing your work now";
     description = "Running classification and scoring for your account.";
+  } else if (unclassified === 0 && needsResponse > 0 && readyActivities === 0) {
+    title = `Detected ${needsResponse} actionable signals`;
+    description =
+      "Classification is complete, but activity extraction has not produced tasks yet. Run processing again to retry scoring.";
   } else if (unclassified > 0) {
     title = `Classifying ${unclassified} remaining signals`;
     description =
@@ -377,6 +381,8 @@ export default function CommandPage() {
                   ? "Connect your email and Slack to start seeing prioritized actions."
                   : (stats?.unclassified ?? 0) > 0
                     ? "Signals are still being classified. Use Process now if you want to clear the queue immediately."
+                    : (stats?.needsResponse ?? 0) > 0
+                      ? "Signals were classified and some need response, but Zoe has not generated activities yet. Use Process now to retry extraction."
                     : (stats?.readyActivities ?? 0) > 0
                       ? "Your action list is ready above. Refresh if you just processed a new batch."
                     : "Your integrations are connected, but there are no actionable items yet."}

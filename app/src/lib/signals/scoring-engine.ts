@@ -45,8 +45,6 @@ export async function runScoringEngine(userId: string): Promise<{
   const linkedIds = new Set(alreadyLinked?.map((l) => l.signal_id) ?? []);
   const newSignals = unclustered.filter((s) => !linkedIds.has(s.id));
 
-  if (!newSignals.length) return { clustered: 0, activitiesCreated: 0, errors: 0 };
-
   // 2. Fetch existing active work objects for this user
   const { data: existingWOs } = await supabase
     .from("work_objects")
@@ -55,38 +53,6 @@ export async function runScoringEngine(userId: string): Promise<{
     .eq("status", "active")
     .order("updated_at", { ascending: false })
     .limit(20);
-
-  // 3. Cluster signals into work objects using AI
-  const clusterPrompt = buildClusterPrompt(
-    newSignals.map((s) => ({
-      id: s.id,
-      source: s.source,
-      sourceType: s.source_type,
-      title: s.title,
-      snippet: s.snippet,
-      senderName: s.sender_name,
-      senderEmail: s.sender_email,
-      topicCluster: s.topic_cluster,
-      urgencyScore: s.urgency_score,
-      ownershipSignal: s.ownership_signal,
-      requiresResponse: s.requires_response,
-      receivedAt: s.received_at,
-    })),
-    existingWOs ?? []
-  );
-
-  let clusterResult;
-  try {
-    const { object } = await generateObject({
-      model: models.fast,
-      schema: clusterResultSchema,
-      prompt: clusterPrompt,
-    });
-    clusterResult = object;
-  } catch (err) {
-    console.error("Clustering error:", err);
-    return { clustered: 0, activitiesCreated: 0, errors: 1 };
-  }
 
   // 4. Upsert work objects and link signals
   let clustered = 0;
@@ -97,75 +63,157 @@ export async function runScoringEngine(userId: string): Promise<{
     signalIds: string[];
   }[] = [];
 
-  for (const cluster of clusterResult.clusters) {
-    // Check if this cluster matches an existing work object (by title from AI)
-    const existingMatch = existingWOs?.find(
-      (wo) => cluster.title.toLowerCase() === wo.title.toLowerCase()
+  if (newSignals.length) {
+    const clusterPrompt = buildClusterPrompt(
+      newSignals.map((s) => ({
+        id: s.id,
+        source: s.source,
+        sourceType: s.source_type,
+        title: s.title,
+        snippet: s.snippet,
+        senderName: s.sender_name,
+        senderEmail: s.sender_email,
+        topicCluster: s.topic_cluster,
+        urgencyScore: s.urgency_score,
+        ownershipSignal: s.ownership_signal,
+        requiresResponse: s.requires_response,
+        receivedAt: s.received_at,
+      })),
+      existingWOs ?? []
     );
 
-    let workObjectId: string;
+    let clusterResult;
+    try {
+      const { object } = await generateObject({
+        model: models.fast,
+        schema: clusterResultSchema,
+        prompt: clusterPrompt,
+      });
+      clusterResult = object;
+    } catch (err) {
+      console.error("Clustering error:", err);
+      return { clustered: 0, activitiesCreated: 0, errors: 1 };
+    }
 
-    if (existingMatch) {
-      // Update existing work object
-      workObjectId = existingMatch.id;
-      const { count: existingCount } = await supabase
-        .from("work_object_signals")
-        .select("signal_id", { count: "exact", head: true })
-        .eq("work_object_id", existingMatch.id);
+    for (const cluster of clusterResult.clusters) {
+      const existingMatch = existingWOs?.find(
+        (wo) => cluster.title.toLowerCase() === wo.title.toLowerCase()
+      );
 
-      await supabase
-        .from("work_objects")
-        .update({
-          signal_count: (existingCount ?? 0) + cluster.signal_ids.length,
-          latest_signal_at: new Date().toISOString(),
-        })
-        .eq("id", existingMatch.id);
-    } else {
-      // Create new work object
-      const { data: newWO, error: createErr } = await supabase
-        .from("work_objects")
-        .insert({
-          user_id: userId,
-          title: cluster.title,
-          description: cluster.description,
-          signal_count: cluster.signal_ids.length,
-          latest_signal_at: new Date().toISOString(),
-        })
-        .select("id")
-        .single();
+      let workObjectId: string;
 
-      if (createErr || !newWO) {
-        errors++;
-        continue;
+      if (existingMatch) {
+        workObjectId = existingMatch.id;
+        const { count: existingCount } = await supabase
+          .from("work_object_signals")
+          .select("signal_id", { count: "exact", head: true })
+          .eq("work_object_id", existingMatch.id);
+
+        await supabase
+          .from("work_objects")
+          .update({
+            signal_count: (existingCount ?? 0) + cluster.signal_ids.length,
+            latest_signal_at: new Date().toISOString(),
+          })
+          .eq("id", existingMatch.id);
+      } else {
+        const { data: newWO, error: createErr } = await supabase
+          .from("work_objects")
+          .insert({
+            user_id: userId,
+            title: cluster.title,
+            description: cluster.description,
+            signal_count: cluster.signal_ids.length,
+            latest_signal_at: new Date().toISOString(),
+          })
+          .select("id")
+          .single();
+
+        if (createErr || !newWO) {
+          errors++;
+          continue;
+        }
+        workObjectId = newWO.id;
       }
-      workObjectId = newWO.id;
+
+      const links = cluster.signal_ids.map((signalId) => ({
+        work_object_id: workObjectId,
+        signal_id: signalId,
+      }));
+
+      const { error: linkErr } = await supabase
+        .from("work_object_signals")
+        .upsert(links, { onConflict: "work_object_id,signal_id" });
+
+      if (linkErr) {
+        errors++;
+      } else {
+        clustered += cluster.signal_ids.length;
+      }
+
+      workObjectsForExtraction.push({
+        id: workObjectId,
+        title: cluster.title,
+        description: cluster.description,
+        signalIds: cluster.signal_ids,
+      });
     }
-
-    // Link signals to work object
-    const links = cluster.signal_ids.map((signalId) => ({
-      work_object_id: workObjectId,
-      signal_id: signalId,
-    }));
-
-    const { error: linkErr } = await supabase
-      .from("work_object_signals")
-      .upsert(links, { onConflict: "work_object_id,signal_id" });
-
-    if (linkErr) {
-      errors++;
-    } else {
-      clustered += cluster.signal_ids.length;
-    }
-
-    workObjectsForExtraction.push({
-      id: workObjectId,
-      title: cluster.title,
-      description: cluster.description,
-      signalIds: cluster.signal_ids,
-    });
   }
 
-  // 5. Extract activities from the new/updated work objects
+  // 5. Extract activities from new work objects and from any existing
+  // work objects that never got activities due to a prior failed run.
+  const { data: workObjectsWithActivities } = await supabase
+    .from("activities")
+    .select("work_object_id")
+    .eq("user_id", userId)
+    .not("work_object_id", "is", null);
+
+  const workObjectIdsWithActivities = new Set(
+    (workObjectsWithActivities ?? [])
+      .map((row) => row.work_object_id)
+      .filter((value): value is string => Boolean(value))
+  );
+
+  const retryWorkObjects =
+    existingWOs?.filter((wo) => !workObjectIdsWithActivities.has(wo.id)) ?? [];
+
+  const extractionCandidates = new Map<
+    string,
+    { id: string; title: string; description: string | null; signalIds: string[] }
+  >();
+
+  for (const workObject of workObjectsForExtraction) {
+    extractionCandidates.set(workObject.id, workObject);
+  }
+
+  if (retryWorkObjects.length) {
+    const { data: retryLinks } = await supabase
+      .from("work_object_signals")
+      .select("work_object_id, signal_id")
+      .in(
+        "work_object_id",
+        retryWorkObjects.map((wo) => wo.id)
+      );
+
+    const signalIdsByWorkObject = new Map<string, string[]>();
+    for (const link of retryLinks ?? []) {
+      const current = signalIdsByWorkObject.get(link.work_object_id) ?? [];
+      current.push(link.signal_id);
+      signalIdsByWorkObject.set(link.work_object_id, current);
+    }
+
+    for (const workObject of retryWorkObjects) {
+      const signalIds = signalIdsByWorkObject.get(workObject.id) ?? [];
+      if (!signalIds.length) continue;
+      extractionCandidates.set(workObject.id, {
+        id: workObject.id,
+        title: workObject.title,
+        description: null,
+        signalIds,
+      });
+    }
+  }
+
   // Fetch user priorities
   const { data: priorities } = await supabase
     .from("strategic_priorities")
@@ -175,9 +223,31 @@ export async function runScoringEngine(userId: string): Promise<{
 
   const priorityTitles = priorities?.map((p) => p.title) ?? [];
 
+  const extractionWorkObjects = Array.from(extractionCandidates.values());
+  if (!extractionWorkObjects.length) {
+    return { clustered, activitiesCreated: 0, errors };
+  }
+
+  const allSignalIds = Array.from(
+    new Set(extractionWorkObjects.flatMap((wo) => wo.signalIds))
+  );
+
+  const { data: extractionSignals } = await supabase
+    .from("signals")
+    .select(
+      "id, source, source_type, title, snippet, sender_name, urgency_score, ownership_signal, requires_response, escalation_level, received_at"
+    )
+    .in("id", allSignalIds);
+
+  const extractionSignalsById = new Map(
+    (extractionSignals ?? []).map((signal) => [signal.id, signal])
+  );
+
   // Build extraction input — include signal details for each work object
-  const woForExtraction = workObjectsForExtraction.map((wo) => {
-    const signalDetails = newSignals
+  const woForExtraction = extractionWorkObjects.map((wo) => {
+    const signalDetails = wo.signalIds
+      .map((signalId) => extractionSignalsById.get(signalId))
+      .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal))
       .filter((s) => wo.signalIds.includes(s.id))
       .map((s) => ({
         source: s.source,
@@ -199,10 +269,6 @@ export async function runScoringEngine(userId: string): Promise<{
       signals: signalDetails,
     };
   });
-
-  // Only extract if we have work objects with signals
-  if (!woForExtraction.length)
-    return { clustered, activitiesCreated: 0, errors };
 
   const extractionPrompt = buildActivityExtractionPrompt(
     woForExtraction,
