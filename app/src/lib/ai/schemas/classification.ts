@@ -4,8 +4,6 @@ export const signalClassificationSchema = z.object({
   urgency_score: z
     .number()
     .int()
-    .min(0)
-    .max(100)
     .describe("Urgency score 0-100. 100 = needs response within the hour."),
   topic_cluster: z
     .string()

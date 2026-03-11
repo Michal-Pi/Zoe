@@ -22,6 +22,11 @@ function getErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function clampUrgencyScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 /** Classify unclassified signals for a user */
 export async function classifySignals(userId: string): Promise<{
   classified: number;
@@ -184,7 +189,7 @@ export async function classifySignals(userId: string): Promise<{
         const { error: updateError } = await supabase
           .from("signals")
           .update({
-            urgency_score: fields.urgency_score,
+            urgency_score: clampUrgencyScore(fields.urgency_score),
             topic_cluster: fields.topic_cluster,
             ownership_signal: fields.ownership_signal,
             requires_response: fields.requires_response,
