@@ -3,7 +3,6 @@ import { Inter, JetBrains_Mono, DM_Sans } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Providers } from "@/lib/providers";
-import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const inter = Inter({
@@ -42,7 +41,6 @@ export default function RootLayout({
           <TooltipProvider>
             {children}
             <Toaster />
-            <Analytics />
           </TooltipProvider>
         </Providers>
       </body>
