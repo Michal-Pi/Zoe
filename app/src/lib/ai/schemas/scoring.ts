@@ -36,9 +36,6 @@ export const activityExtractionSchema = z.object({
         .describe("Brief context if needed."),
       time_estimate_minutes: z
         .number()
-        .int()
-        .min(1)
-        .max(480)
         .describe("Estimated time to complete in minutes."),
       horizon: z
         .enum(["now", "soon", "strategic"])
@@ -58,9 +55,6 @@ export const activityExtractionSchema = z.object({
         .describe("ISO 8601 deadline if mentioned or implied. Null if none."),
       score: z
         .number()
-        .int()
-        .min(0)
-        .max(100)
         .describe("Priority score 0-100 based on the scoring factors."),
       score_rationale: z
         .array(z.string())
@@ -69,10 +63,10 @@ export const activityExtractionSchema = z.object({
         ),
       scoring_factors: z
         .object({
-          urgency: z.number().int().min(0).max(100),
-          importance: z.number().int().min(0).max(100),
-          effort: z.number().int().min(0).max(100),
-          strategic_alignment: z.number().int().min(0).max(100),
+          urgency: z.number(),
+          importance: z.number(),
+          effort: z.number(),
+          strategic_alignment: z.number(),
         })
         .describe("Individual scoring dimensions."),
       batch_key: z

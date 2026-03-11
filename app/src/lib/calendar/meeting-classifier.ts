@@ -4,6 +4,11 @@ import { meetingClassificationSchema } from "@/lib/ai/schemas/meeting";
 import { buildMeetingClassificationPrompt } from "@/lib/ai/prompts/classify-meetings";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
+function clampPrepMinutes(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(60, Math.round(value)));
+}
+
 // Classify unclassified calendar events for a user
 export async function classifyMeetings(userId: string): Promise<{
   classified: number;
@@ -88,6 +93,9 @@ export async function classifyMeetings(userId: string): Promise<{
     }
 
     for (const classification of object.classifications) {
+      const prepMinutes = clampPrepMinutes(
+        classification.prep_time_needed_minutes
+      );
       const risks = [...classification.efficiency_risks];
       if (
         backToBackIds.has(classification.event_id) &&
@@ -98,13 +106,13 @@ export async function classifyMeetings(userId: string): Promise<{
 
       // Check if there's a prep block before high-density meetings
       let hasPrepBlock = false;
-      if (classification.prep_time_needed_minutes > 0) {
+      if (prepMinutes > 0) {
         const event = events.find((e) => e.id === classification.event_id);
         if (event) {
           const eventStart = new Date(event.start_at);
           const prepWindow = new Date(
             eventStart.getTime() -
-              classification.prep_time_needed_minutes * 60 * 1000
+              prepMinutes * 60 * 1000
           );
 
           const { count } = await supabase
@@ -124,7 +132,7 @@ export async function classifyMeetings(userId: string): Promise<{
           decision_density: classification.decision_density,
           ownership_load: classification.ownership_load,
           efficiency_risks: risks,
-          prep_time_needed_minutes: classification.prep_time_needed_minutes,
+          prep_time_needed_minutes: prepMinutes,
           has_prep_block: hasPrepBlock,
         })
         .eq("id", classification.event_id)

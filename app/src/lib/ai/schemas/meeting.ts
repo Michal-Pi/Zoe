@@ -21,9 +21,6 @@ export const meetingClassificationSchema = z.object({
         ),
       prep_time_needed_minutes: z
         .number()
-        .int()
-        .min(0)
-        .max(60)
         .describe(
           "Minutes of prep needed before this meeting. 0 for casual/standup, 15-30 for decisions, 30-60 for presentations."
         ),

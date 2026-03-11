@@ -6,6 +6,11 @@ import { buildClusterPrompt } from "@/lib/ai/prompts/cluster-signals";
 import { buildActivityExtractionPrompt } from "@/lib/ai/prompts/extract-activities";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
+function clampRange(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
 // Cluster classified signals into work objects, then extract scored activities
 export async function runScoringEngine(userId: string): Promise<{
   clustered: number;
@@ -227,10 +232,19 @@ export async function runScoringEngine(userId: string): Promise<{
         work_object_id: matchedWO?.id ?? woForExtraction[0]?.id ?? null,
         title: activity.title,
         description: activity.description,
-        time_estimate_minutes: activity.time_estimate_minutes,
-        score: activity.score,
+        time_estimate_minutes: clampRange(activity.time_estimate_minutes, 1, 480),
+        score: clampRange(activity.score, 0, 100),
         score_rationale: activity.score_rationale,
-        scoring_factors: activity.scoring_factors,
+        scoring_factors: {
+          urgency: clampRange(activity.scoring_factors.urgency, 0, 100),
+          importance: clampRange(activity.scoring_factors.importance, 0, 100),
+          effort: clampRange(activity.scoring_factors.effort, 0, 100),
+          strategic_alignment: clampRange(
+            activity.scoring_factors.strategic_alignment,
+            0,
+            100
+          ),
+        },
         horizon: activity.horizon,
         trigger_description: activity.trigger_description,
         deadline_at: activity.deadline_at,
