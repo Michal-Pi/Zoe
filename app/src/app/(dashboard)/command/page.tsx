@@ -15,6 +15,7 @@ import { ActivityList } from "@/components/command/activity-list";
 import { SignalStatsBar } from "@/components/command/signal-stats-bar";
 import { useActivities, useUpdateActivity } from "@/hooks/use-activities";
 import { useSignalStats } from "@/hooks/use-signals";
+import { useHasConnection } from "@/hooks/use-connections";
 
 function getSnoozeOptions() {
   const laterToday = new Date();
@@ -106,6 +107,8 @@ function SnoozePicker({
 export default function CommandPage() {
   const { data: activities, isLoading: activitiesLoading, isError } = useActivities();
   const { data: stats, isLoading: statsLoading } = useSignalStats();
+  const hasGoogle = useHasConnection("google");
+  const hasSlack = useHasConnection("slack");
   const updateActivity = useUpdateActivity();
   const router = useRouter();
   const [snoozeTarget, setSnoozeTarget] = useState<string | null>(null);
@@ -200,8 +203,11 @@ export default function CommandPage() {
                 No activities yet
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
-                Connect your email and Slack to start seeing prioritized
-                actions.
+                {!hasGoogle && !hasSlack
+                  ? "Connect your email and Slack to start seeing prioritized actions."
+                  : (stats?.totalToday ?? 0) > 0 || (stats?.unclassified ?? 0) > 0
+                    ? "Your signals are syncing and being processed. Prioritized actions will appear here once classification and scoring finish."
+                    : "Your integrations are connected, but there are no actionable items yet."}
               </p>
             </div>
           </CardContent>
