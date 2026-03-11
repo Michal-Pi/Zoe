@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,9 +13,8 @@ const STEPS = ["welcome", "google", "slack", "priorities", "hours", "done"] as c
 type Step = (typeof STEPS)[number];
 
 export default function OnboardingPage() {
-  const searchParams = useSearchParams();
-  const requestedStep = searchParams.get("step");
-  const success = searchParams.get("success");
+  const [requestedStep, setRequestedStep] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("welcome");
   const [priorities, setPriorities] = useState(["", "", ""]);
   const [workHoursStart, setWorkHoursStart] = useState("09:00");
@@ -28,6 +27,12 @@ export default function OnboardingPage() {
   const [saving, setSaving] = useState(false);
   const router = useRouter();
   const supabase = createClient();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setRequestedStep(params.get("step"));
+    setSuccess(params.get("success"));
+  }, []);
 
   useEffect(() => {
     if (requestedStep && STEPS.includes(requestedStep as Step)) {
