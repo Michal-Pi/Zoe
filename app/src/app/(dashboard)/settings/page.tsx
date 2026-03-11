@@ -117,6 +117,7 @@ function SettingsContent() {
           email={googleConnection?.email ?? undefined}
           lastSyncAt={googleConnection?.last_sync_at ?? undefined}
           connectUrl={withBasePath("/api/integrations/google/connect")}
+          reconnectUrl={withBasePath("/api/integrations/google/connect?next=/settings")}
           loading={loading}
         />
 
@@ -155,6 +156,7 @@ function IntegrationCard({
   email,
   lastSyncAt,
   connectUrl,
+  reconnectUrl,
   loading,
   comingSoon,
 }: {
@@ -164,6 +166,7 @@ function IntegrationCard({
   email?: string;
   lastSyncAt?: string;
   connectUrl: string;
+  reconnectUrl?: string;
   loading: boolean;
   comingSoon?: boolean;
 }) {
@@ -189,17 +192,24 @@ function IntegrationCard({
       </CardHeader>
       <CardContent>
         {connected ? (
-          <div className="text-sm text-muted-foreground">
-            <p>{email}</p>
-            {lastSyncAt && (
-              <p className="mt-1">
-                Last synced:{" "}
-                {new Date(lastSyncAt).toLocaleString(undefined, {
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
-              </p>
-            )}
+          <div className="flex items-start justify-between gap-4">
+            <div className="text-sm text-muted-foreground">
+              <p>{email}</p>
+              {lastSyncAt && (
+                <p className="mt-1">
+                  Last synced:{" "}
+                  {new Date(lastSyncAt).toLocaleString(undefined, {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                </p>
+              )}
+            </div>
+            {reconnectUrl ? (
+              <Button size="sm" variant="outline" asChild>
+                <a href={reconnectUrl}>Reconnect</a>
+              </Button>
+            ) : null}
           </div>
         ) : (
           <Button
