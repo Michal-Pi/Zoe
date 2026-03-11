@@ -9,6 +9,7 @@ interface BehavioralSnapshotSectionProps {
   data: BehavioralSnapshot | null;
   suggestions?: BehavioralSuggestionData[];
   loading?: boolean;
+  hasIntegrations?: boolean;
 }
 
 function TrendArrow({ trend }: { trend?: TrendDirection }) {
@@ -25,6 +26,7 @@ export function BehavioralSnapshotSection({
   data,
   suggestions,
   loading,
+  hasIntegrations,
 }: BehavioralSnapshotSectionProps) {
   if (loading) {
     return (
@@ -52,7 +54,9 @@ export function BehavioralSnapshotSection({
         <Card>
           <CardContent className="flex items-center justify-center py-12">
             <p className="text-sm text-muted-foreground">
-              Connect your integrations to see behavioral insights.
+              {hasIntegrations
+                ? "Behavioral insights will appear after a few days of synced activity."
+                : "Connect your integrations to see behavioral insights."}
             </p>
           </CardContent>
         </Card>

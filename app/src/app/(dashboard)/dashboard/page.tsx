@@ -54,6 +54,7 @@ export default function DashboardPage() {
         data={dashboardData?.behavioralSnapshot ?? null}
         suggestions={dashboardData?.suggestions}
         loading={isLoading}
+        hasIntegrations={hasCalendar || hasSlack}
       />
 
       {/* Section 3: Intervention Suggestions */}
