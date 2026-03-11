@@ -11,14 +11,21 @@ function clampRange(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(value)));
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 // Cluster classified signals into work objects, then extract scored activities
 export async function runScoringEngine(userId: string): Promise<{
   clustered: number;
   activitiesCreated: number;
   errors: number;
+  errorDetails: string[];
 }> {
   const supabase = await createServiceRoleClient();
   let errors = 0;
+  const errorDetails: string[] = [];
 
   // 1. Fetch classified signals not yet linked to a work object
   const { data: unclustered, error: fetchErr } = await supabase
@@ -31,7 +38,14 @@ export async function runScoringEngine(userId: string): Promise<{
     .order("received_at", { ascending: false })
     .limit(50);
 
-  if (fetchErr || !unclustered?.length) return { clustered: 0, activitiesCreated: 0, errors: 0 };
+  if (fetchErr || !unclustered?.length) {
+    return {
+      clustered: 0,
+      activitiesCreated: 0,
+      errors: 0,
+      errorDetails: fetchErr ? [getErrorMessage(fetchErr)] : [],
+    };
+  }
 
   // Filter to only signals not yet in work_object_signals
   const { data: alreadyLinked } = await supabase
@@ -91,8 +105,18 @@ export async function runScoringEngine(userId: string): Promise<{
       });
       clusterResult = object;
     } catch (err) {
-      console.error("Clustering error:", err);
-      return { clustered: 0, activitiesCreated: 0, errors: 1 };
+      const message = `clustering failed: ${getErrorMessage(err)}`;
+      console.error("Clustering error:", {
+        userId,
+        signalIds: newSignals.map((signal) => signal.id),
+        error: getErrorMessage(err),
+      });
+      return {
+        clustered: 0,
+        activitiesCreated: 0,
+        errors: 1,
+        errorDetails: [message],
+      };
     }
 
     for (const cluster of clusterResult.clusters) {
@@ -131,6 +155,9 @@ export async function runScoringEngine(userId: string): Promise<{
 
         if (createErr || !newWO) {
           errors++;
+          errorDetails.push(
+            `work object create failed for "${cluster.title}": ${getErrorMessage(createErr)}`
+          );
           continue;
         }
         workObjectId = newWO.id;
@@ -147,6 +174,9 @@ export async function runScoringEngine(userId: string): Promise<{
 
       if (linkErr) {
         errors++;
+        errorDetails.push(
+          `work object link failed for ${workObjectId}: ${getErrorMessage(linkErr)}`
+        );
       } else {
         clustered += cluster.signal_ids.length;
       }
@@ -225,7 +255,7 @@ export async function runScoringEngine(userId: string): Promise<{
 
   const extractionWorkObjects = Array.from(extractionCandidates.values());
   if (!extractionWorkObjects.length) {
-    return { clustered, activitiesCreated: 0, errors };
+    return { clustered, activitiesCreated: 0, errors, errorDetails: errorDetails.slice(0, 10) };
   }
 
   const allSignalIds = Array.from(
@@ -321,14 +351,23 @@ export async function runScoringEngine(userId: string): Promise<{
 
       if (insertErr) {
         errors++;
+        errorDetails.push(
+          `activity insert failed for "${activity.title}": ${getErrorMessage(insertErr)}`
+        );
       } else {
         activitiesCreated++;
       }
     }
   } catch (err) {
-    console.error("Activity extraction error:", err);
+    const message = `activity extraction failed: ${getErrorMessage(err)}`;
+    console.error("Activity extraction error:", {
+      userId,
+      workObjectIds: woForExtraction.map((workObject) => workObject.id),
+      error: getErrorMessage(err),
+    });
+    errorDetails.push(message);
     errors++;
   }
 
-  return { clustered, activitiesCreated, errors };
+  return { clustered, activitiesCreated, errors, errorDetails: errorDetails.slice(0, 10) };
 }

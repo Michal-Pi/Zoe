@@ -49,6 +49,6 @@ export async function POST() {
     remainingBefore: remainingBefore ?? 0,
     remainingAfter: remainingAfter ?? 0,
     readyActivities: readyActivities ?? 0,
-    errorDetails: classifyResult.errorDetails,
+    errorDetails: [...classifyResult.errorDetails, ...scoringResult.errorDetails].slice(0, 10),
   });
 }

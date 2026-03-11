@@ -37,6 +37,7 @@ export async function GET(request: NextRequest) {
         activitiesCreated: 0,
         errors: 1,
         error: err instanceof Error ? err.message : String(err),
+        errorDetails: [],
       });
     }
   }
