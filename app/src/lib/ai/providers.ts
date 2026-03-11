@@ -4,6 +4,6 @@ import { anthropic } from "@ai-sdk/anthropic";
 export const models = {
   /** Fast, cheap — signal classification, meeting classification */
   fast: anthropic("claude-3-haiku-20240307"),
-  /** Capable — activity extraction, chat, drafting */
-  standard: anthropic("claude-3-5-sonnet-20241022"),
+  /** Use the proven available model until Sonnet access is confirmed */
+  standard: anthropic("claude-3-haiku-20240307"),
 } as const;
