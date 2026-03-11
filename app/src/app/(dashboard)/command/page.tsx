@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,6 +18,7 @@ import { SignalStatsBar } from "@/components/command/signal-stats-bar";
 import { useActivities, useUpdateActivity } from "@/hooks/use-activities";
 import { useSignalStats } from "@/hooks/use-signals";
 import { useHasConnection } from "@/hooks/use-connections";
+import { withBasePath } from "@/lib/base-path";
 
 function getSnoozeOptions() {
   const laterToday = new Date();
@@ -104,14 +107,168 @@ function SnoozePicker({
   );
 }
 
+function ProcessingStatusCard({
+  totalSignals,
+  unclassified,
+  needsResponse,
+  readyActivities,
+  isProcessingNow,
+  onProcessNow,
+}: {
+  totalSignals: number;
+  unclassified: number;
+  needsResponse: number;
+  readyActivities: number;
+  isProcessingNow: boolean;
+  onProcessNow: () => void;
+}) {
+  const processedSignals = Math.max(totalSignals - unclassified, 0);
+  const processedPercent =
+    totalSignals > 0 ? Math.min(100, Math.round((processedSignals / totalSignals) * 100)) : 0;
+
+  let title = "Building your action list";
+  let description =
+    "Zoe is classifying your signals and extracting the next actions that matter.";
+
+  if (isProcessingNow) {
+    title = "Processing your work now";
+    description = "Running classification and scoring for your account.";
+  } else if (unclassified > 0) {
+    title = `Classifying ${unclassified} remaining signals`;
+    description =
+      "The queue is active. Refresh this panel or run processing now to speed up the first pass.";
+  } else if (readyActivities > 0) {
+    title = "Action list is ready";
+    description = "New signals will keep updating this list as they arrive.";
+  }
+
+  return (
+    <Card className="border-primary/20 shadow-md">
+      <CardContent className="space-y-5 p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <p className="font-display text-lg font-medium text-foreground">{title}</p>
+            <p className="max-w-2xl text-sm text-muted-foreground">{description}</p>
+          </div>
+          <Button onClick={onProcessNow} disabled={isProcessingNow}>
+            {isProcessingNow ? "Processing..." : "Process now"}
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <span>Pipeline progress</span>
+            <span>{processedPercent}% processed</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${processedPercent}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-border/60 bg-muted/30 p-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              Imported
+            </p>
+            <p className="mt-2 font-mono text-2xl font-semibold text-foreground">
+              {totalSignals}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-muted/30 p-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              Processed
+            </p>
+            <p className="mt-2 font-mono text-2xl font-semibold text-foreground">
+              {processedSignals}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-muted/30 p-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              Need response
+            </p>
+            <p className="mt-2 font-mono text-2xl font-semibold text-foreground">
+              {needsResponse}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-muted/30 p-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              Ready actions
+            </p>
+            <p className="mt-2 font-mono text-2xl font-semibold text-foreground">
+              {readyActivities}
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function CommandPage() {
   const { data: activities, isLoading: activitiesLoading, isError } = useActivities();
   const { data: stats, isLoading: statsLoading } = useSignalStats();
   const hasGoogle = useHasConnection("google");
   const hasSlack = useHasConnection("slack");
   const updateActivity = useUpdateActivity();
+  const queryClient = useQueryClient();
   const router = useRouter();
   const [snoozeTarget, setSnoozeTarget] = useState<string | null>(null);
+
+  const processNow = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(withBasePath("/api/command/process"), {
+        method: "POST",
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            error?: string;
+            classified?: number;
+            classificationErrors?: number;
+            activitiesCreated?: number;
+            remainingBefore?: number;
+            remainingAfter?: number;
+            errorDetails?: string[];
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to process signals");
+      }
+
+      return payload;
+    },
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["signal-stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["activities"] }),
+      ]);
+
+      const classified = result?.classified ?? 0;
+      const created = result?.activitiesCreated ?? 0;
+      const remainingAfter = result?.remainingAfter ?? 0;
+
+      if (classified > 0 || created > 0) {
+        toast.success(
+          `Processed ${classified} signals and created ${created} activities. ${remainingAfter} still in queue.`
+        );
+        return;
+      }
+
+      if (result?.classificationErrors) {
+        toast.error(result.errorDetails?.[0] ?? "Processing ran, but it hit an error.");
+        return;
+      }
+
+      toast("No new signals needed processing.");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to process signals");
+    },
+  });
 
   const handleComplete = (id: string) => {
     updateActivity.mutate({
@@ -169,11 +326,24 @@ export default function CommandPage() {
 
       {/* Signal stats bar */}
       <SignalStatsBar
+        totalSignals={stats?.totalSignals ?? 0}
         totalToday={stats?.totalToday ?? 0}
         unclassified={stats?.unclassified ?? 0}
         needsResponse={stats?.needsResponse ?? 0}
+        readyActivities={stats?.readyActivities ?? 0}
         isLoading={statsLoading}
       />
+
+      {(hasGoogle || hasSlack) && !statsLoading ? (
+        <ProcessingStatusCard
+          totalSignals={stats?.totalSignals ?? 0}
+          unclassified={stats?.unclassified ?? 0}
+          needsResponse={stats?.needsResponse ?? 0}
+          readyActivities={stats?.readyActivities ?? 0}
+          isProcessingNow={processNow.isPending}
+          onProcessNow={() => processNow.mutate()}
+        />
+      ) : null}
 
       {/* Activities */}
       {isError ? (
@@ -205,8 +375,10 @@ export default function CommandPage() {
               <p className="mt-2 text-sm text-muted-foreground">
                 {!hasGoogle && !hasSlack
                   ? "Connect your email and Slack to start seeing prioritized actions."
-                  : (stats?.totalToday ?? 0) > 0 || (stats?.unclassified ?? 0) > 0
-                    ? "Your signals are syncing and being processed. Prioritized actions will appear here once classification and scoring finish."
+                  : (stats?.unclassified ?? 0) > 0
+                    ? "Signals are still being classified. Use Process now if you want to clear the queue immediately."
+                    : (stats?.readyActivities ?? 0) > 0
+                      ? "Your action list is ready above. Refresh if you just processed a new batch."
                     : "Your integrations are connected, but there are no actionable items yet."}
               </p>
             </div>
