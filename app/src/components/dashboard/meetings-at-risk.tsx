@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { CalendarEvent } from "@/domain/calendar";
 import { useCalendarEvents } from "@/hooks/use-calendar";
+import { PrepBlockAction } from "@/components/calendar/prep-block-action";
 
 const riskLabels: Record<string, string> = {
   no_agenda: "No agenda",
@@ -166,6 +167,7 @@ export function MeetingsAtRiskSection({ hasCalendar }: { hasCalendar: boolean })
                         Prep me
                       </Link>
                     </Button>
+                    <PrepBlockAction event={event} label="Block prep time" />
                     <Button asChild size="sm" variant="outline">
                       <Link href="/calendar">Review calendar</Link>
                     </Button>

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { CalendarEvent } from "@/domain/calendar";
+import { PrepBlockAction } from "@/components/calendar/prep-block-action";
 
 interface MeetingCardProps {
   event: CalendarEvent;
@@ -180,6 +181,12 @@ export function MeetingCard({ event }: MeetingCardProps) {
                 ))}
               </div>
             )}
+
+            {(event.prepTimeNeededMinutes ?? 0) > 0 && !event.hasPrepBlock ? (
+              <div className="mt-3">
+                <PrepBlockAction event={event} />
+              </div>
+            ) : null}
           </div>
         </div>
       </CardContent>

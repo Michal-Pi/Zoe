@@ -53,6 +53,13 @@ interface EventsListResponse {
   nextSyncToken?: string;
 }
 
+interface CreateCalendarEventInput {
+  summary: string;
+  description?: string;
+  start: string;
+  end: string;
+}
+
 /** Fetch all events from Google Calendar with pagination */
 async function fetchAllEvents(
   connectionId: string,
@@ -281,4 +288,38 @@ class SyncTokenExpiredError extends Error {
     super("Sync token expired (410 Gone)");
     this.name = "SyncTokenExpiredError";
   }
+}
+
+export async function createCalendarEvent(
+  connectionId: string,
+  input: CreateCalendarEventInput,
+  calendarId: string = "primary"
+): Promise<{ id: string }> {
+  const accessToken = await getValidAccessToken(connectionId);
+
+  const response = await fetch(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: input.summary,
+        description: input.description ?? "",
+        start: { dateTime: input.start },
+        end: { dateTime: input.end },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Calendar create event error: ${response.status} ${await response.text()}`
+    );
+  }
+
+  const data = (await response.json()) as { id: string };
+  return { id: data.id };
 }
