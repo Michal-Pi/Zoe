@@ -16,14 +16,25 @@ export default function ChatPage() {
   const { messages, sendMessage, status } = useChat({ transport });
 
   const [input, setInput] = useState("");
+  const initialPrompt = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("prompt");
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const hasAutoSentRef = useRef(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!initialPrompt || isLoading || messages.length > 0 || hasAutoSentRef.current) return;
+    hasAutoSentRef.current = true;
+    sendMessage({ text: initialPrompt });
+  }, [initialPrompt, isLoading, messages.length, sendMessage]);
 
   const onSubmit = () => {
     if (input.trim() && !isLoading) {

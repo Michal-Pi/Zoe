@@ -4,6 +4,7 @@ import { RealityBriefSection } from "@/components/dashboard/reality-brief";
 import { BehavioralSnapshotSection } from "@/components/dashboard/behavioral-snapshot";
 import { InterventionsSection } from "@/components/dashboard/interventions";
 import { ConnectionBanner } from "@/components/dashboard/connection-banner";
+import { MeetingsAtRiskSection } from "@/components/dashboard/meetings-at-risk";
 import { useDashboard } from "@/hooks/use-dashboard";
 import { useHasConnection } from "@/hooks/use-connections";
 
@@ -48,6 +49,8 @@ export default function DashboardPage() {
         hasSlack={hasSlack}
         hasEmail={hasCalendar}
       />
+
+      <MeetingsAtRiskSection hasCalendar={hasCalendar} />
 
       {/* Section 2: Behavioral Snapshot */}
       <BehavioralSnapshotSection
