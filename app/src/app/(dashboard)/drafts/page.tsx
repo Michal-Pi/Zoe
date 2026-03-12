@@ -12,11 +12,35 @@ import { withBasePath } from "@/lib/base-path";
 
 export default function DraftsPage() {
   const [selectedDraft, setSelectedDraft] = useState<DraftReply | null>(null);
-  const [tab, setTab] = useState<"pending" | "sent" | "discarded">("pending");
+  const [tab, setTab] = useState<"review" | "approved" | "sent" | "discarded">(
+    "review"
+  );
   const [sendingDraftId, setSendingDraftId] = useState<string | null>(null);
 
   const { data: drafts, isLoading } = useDrafts(tab);
   const updateDraft = useUpdateDraft();
+
+  const emptyStateCopy: Record<
+    typeof tab,
+    { title: string; description: string }
+  > = {
+    review: {
+      title: "No drafts need review",
+      description: "Zoe will place new or edited drafts here until you approve them.",
+    },
+    approved: {
+      title: "No approved drafts",
+      description: "Approve a draft first, then it will move here until you send it.",
+    },
+    sent: {
+      title: "No sent drafts yet",
+      description: "Approved drafts you send from Zoe will appear here.",
+    },
+    discarded: {
+      title: "No discarded drafts",
+      description: "Discarded drafts stay here as a record of what you chose not to send.",
+    },
+  };
 
   const handleSend = async (draft: DraftReply) => {
     setSendingDraftId(draft.id);
@@ -68,7 +92,8 @@ export default function DraftsPage() {
         onValueChange={(v) => setTab(v as typeof tab)}
       >
         <TabsList>
-          <TabsTrigger value="pending">Pending</TabsTrigger>
+          <TabsTrigger value="review">Needs review</TabsTrigger>
+          <TabsTrigger value="approved">Approved</TabsTrigger>
           <TabsTrigger value="sent">Sent</TabsTrigger>
           <TabsTrigger value="discarded">Discarded</TabsTrigger>
         </TabsList>
@@ -85,6 +110,8 @@ export default function DraftsPage() {
               drafts={drafts ?? []}
               onSelect={setSelectedDraft}
               selectedId={selectedDraft?.id}
+              emptyTitle={emptyStateCopy[tab].title}
+              emptyDescription={emptyStateCopy[tab].description}
             />
           )}
         </TabsContent>

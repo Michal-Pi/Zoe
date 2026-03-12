@@ -93,11 +93,35 @@ export function DraftReviewPanel({
 
   const handleSaveEdit = () => {
     updateDraft.mutate(
-      { id: draft.id, updates: { edited_body: editedBody, status: "edited" } },
+      {
+        id: draft.id,
+        updates: {
+          edited_body: editedBody,
+          status: "edited",
+          accepted_at: null,
+        },
+      },
       {
         onSuccess: () => {
           setIsEditing(false);
           toast.success("Draft updated");
+        },
+      }
+    );
+  };
+
+  const handleApprove = () => {
+    updateDraft.mutate(
+      {
+        id: draft.id,
+        updates: {
+          status: "accepted",
+          accepted_at: new Date().toISOString(),
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success("Draft approved for send");
         },
       }
     );
@@ -156,6 +180,11 @@ export function DraftReviewPanel({
               <p className="mt-2 text-sm text-foreground">
                 Review recipient, context, and tone before sending. Zoe will not send this until you confirm.
               </p>
+              {draft.acceptedAt ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Approved {new Date(draft.acceptedAt).toLocaleString()}
+                </p>
+              ) : null}
             </div>
 
             {warnings.length ? (
@@ -314,12 +343,22 @@ export function DraftReviewPanel({
               <Button
                 size="sm"
                 onClick={handleApproveAndSend}
-                disabled={updateDraft.isPending || isSending}
+                disabled={updateDraft.isPending || isSending || draft.status !== "accepted"}
               >
-                {isSending ? "Sending..." : "Approve & Send"}
+                {isSending ? "Sending..." : "Send approved draft"}
               </Button>
               <Button size="sm" variant="outline" onClick={handleEdit}>
                 Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleApprove}
+                disabled={
+                  updateDraft.isPending || isSending || draft.status === "accepted"
+                }
+              >
+                {draft.status === "accepted" ? "Approved" : "Approve draft"}
               </Button>
               <Button
                 size="sm"

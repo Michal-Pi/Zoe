@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   // Verify the draft belongs to this user and is sendable
   const { data: draft, error: draftError } = await supabase
     .from("draft_replies")
-    .select("id, status")
+    .select("id, status, accepted_at")
     .eq("id", draftId)
     .eq("user_id", user.id)
     .single();
@@ -46,6 +46,13 @@ export async function POST(request: NextRequest) {
   if (draft.status === "sent") {
     return NextResponse.json(
       { error: "Draft already sent" },
+      { status: 400 }
+    );
+  }
+
+  if (draft.status !== "accepted" || !draft.accepted_at) {
+    return NextResponse.json(
+      { error: "Draft must be approved before sending" },
       { status: 400 }
     );
   }

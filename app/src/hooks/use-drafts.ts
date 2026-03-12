@@ -18,6 +18,7 @@ function mapRow(row: Record<string, unknown>): DraftReply {
     draftType: row.draft_type as DraftReply["draftType"],
     status: row.status as DraftReply["status"],
     editedBody: row.edited_body as string | null,
+    acceptedAt: row.accepted_at as string | null,
     sentAt: row.sent_at as string | null,
     discardedAt: row.discarded_at as string | null,
     modelUsed: row.model_used as string,
@@ -28,7 +29,9 @@ function mapRow(row: Record<string, unknown>): DraftReply {
   };
 }
 
-export function useDrafts(status: DraftReply["status"] | "all" = "pending") {
+export function useDrafts(
+  status: "review" | "approved" | "sent" | "discarded" | "all" = "review"
+) {
   const supabase = createClient();
 
   return useQuery({
@@ -40,7 +43,11 @@ export function useDrafts(status: DraftReply["status"] | "all" = "pending") {
         .order("created_at", { ascending: false })
         .limit(50);
 
-      if (status !== "all") {
+      if (status === "review") {
+        q = q.in("status", ["pending", "edited"]);
+      } else if (status === "approved") {
+        q = q.eq("status", "accepted");
+      } else if (status !== "all") {
         q = q.eq("status", status);
       }
 
@@ -176,7 +183,7 @@ export function useDraftCount() {
       const { count, error } = await supabase
         .from("draft_replies")
         .select("*", { count: "exact", head: true })
-        .eq("status", "pending");
+        .in("status", ["pending", "edited"]);
 
       if (error) throw error;
       return count ?? 0;
@@ -198,6 +205,7 @@ export function useUpdateDraft() {
       updates: Partial<{
         status: DraftReply["status"];
         edited_body: string | null;
+        accepted_at: string | null;
         sent_at: string | null;
         discarded_at: string | null;
       }>;

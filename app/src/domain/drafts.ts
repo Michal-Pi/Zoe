@@ -14,6 +14,7 @@ export interface DraftReply {
 
   status: "pending" | "accepted" | "edited" | "sent" | "discarded";
   editedBody: string | null;
+  acceptedAt: string | null;
   sentAt: string | null;
   discardedAt: string | null;
 
