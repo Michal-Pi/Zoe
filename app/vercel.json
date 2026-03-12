@@ -13,10 +13,6 @@
       "schedule": "*/3 * * * *"
     },
     {
-      "path": "/zoe/api/cron/drafts",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/zoe/api/cron/metrics",
       "schedule": "0 1 * * *"
     }
