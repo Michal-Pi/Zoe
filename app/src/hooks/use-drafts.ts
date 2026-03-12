@@ -209,7 +209,14 @@ export function useDraftContext(draft: DraftReply | null) {
           .limit(8);
 
         threadSignals =
-          relatedSignals?.map((signal) => ({
+          relatedSignals?.map((signal: {
+            id: string;
+            title: string | null;
+            snippet: string | null;
+            sender_name: string | null;
+            sender_email: string | null;
+            received_at: string | null;
+          }) => ({
             id: signal.id,
             title: signal.title,
             snippet: signal.snippet,
