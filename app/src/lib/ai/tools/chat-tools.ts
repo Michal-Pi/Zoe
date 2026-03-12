@@ -303,12 +303,34 @@ export function getChatTools(userId: string) {
         message: string;
         thread_ts: string | null;
       }) => {
+        const supabase = await createServiceRoleClient();
+        const { data: draft, error } = await supabase
+          .from("slack_drafts")
+          .insert({
+            user_id: userId,
+            channel_id: channel,
+            channel_label: channel,
+            message,
+            thread_ts,
+            status: "pending",
+            model_used: "chat_tool",
+          })
+          .select("id")
+          .single();
+
+        if (error || !draft) {
+          return {
+            error: error?.message ?? "Failed to save Slack draft for review.",
+          };
+        }
+
         return {
-          status: "draft" as const,
+          status: "draft_saved" as const,
+          draft_id: draft.id,
           channel,
           message,
           thread_ts,
-          note: "Draft ready. Present to user for review. If approved, use send_slack_message.",
+          note: "Slack draft saved to Drafts. Review and approve it there before sending.",
         };
       },
     },

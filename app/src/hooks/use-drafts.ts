@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
-import type { DraftReply } from "@/domain/drafts";
+import type { DraftReply, SlackDraft } from "@/domain/drafts";
 
 function mapRow(row: Record<string, unknown>): DraftReply {
   return {
@@ -25,6 +25,28 @@ function mapRow(row: Record<string, unknown>): DraftReply {
     modelUsed: row.model_used as string,
     promptTokens: row.prompt_tokens as number | null,
     completionTokens: row.completion_tokens as number | null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapSlackRow(row: Record<string, unknown>): SlackDraft {
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    activityId: row.activity_id as string | null,
+    signalId: row.signal_id as string | null,
+    channelId: row.channel_id as string,
+    channelLabel: row.channel_label as string | null,
+    message: row.message as string,
+    editedMessage: row.edited_message as string | null,
+    threadTs: row.thread_ts as string | null,
+    status: row.status as SlackDraft["status"],
+    acceptedAt: row.accepted_at as string | null,
+    reviewMetadata: row.review_metadata as SlackDraft["reviewMetadata"],
+    sentAt: row.sent_at as string | null,
+    discardedAt: row.discarded_at as string | null,
+    modelUsed: row.model_used as string,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -55,6 +77,36 @@ export function useDrafts(
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []).map(mapRow);
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSlackDrafts(
+  status: "review" | "approved" | "sent" | "discarded" | "all" = "review"
+) {
+  const supabase = createClient();
+
+  return useQuery({
+    queryKey: ["slack-drafts", status],
+    queryFn: async () => {
+      let q = supabase
+        .from("slack_drafts")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (status === "review") {
+        q = q.in("status", ["pending", "edited"]);
+      } else if (status === "approved") {
+        q = q.eq("status", "accepted");
+      } else if (status !== "all") {
+        q = q.eq("status", status);
+      }
+
+      const { data, error } = await q;
+      if (error) throw error;
+      return (data ?? []).map(mapSlackRow);
     },
     refetchInterval: 30_000,
   });
@@ -193,6 +245,24 @@ export function useDraftCount() {
   });
 }
 
+export function useSlackDraftCount() {
+  const supabase = createClient();
+
+  return useQuery({
+    queryKey: ["slack-drafts", "count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("slack_drafts")
+        .select("*", { count: "exact", head: true })
+        .in("status", ["pending", "edited"]);
+
+      if (error) throw error;
+      return count ?? 0;
+    },
+    refetchInterval: 30_000,
+  });
+}
+
 export function useUpdateDraft() {
   const supabase = createClient();
   const queryClient = useQueryClient();
@@ -221,6 +291,38 @@ export function useUpdateDraft() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
+    },
+  });
+}
+
+export function useUpdateSlackDraft() {
+  const supabase = createClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      updates,
+    }: {
+      id: string;
+      updates: Partial<{
+        status: SlackDraft["status"];
+        edited_message: string | null;
+        accepted_at: string | null;
+        review_metadata: SlackDraft["reviewMetadata"] | null;
+        sent_at: string | null;
+        discarded_at: string | null;
+      }>;
+    }) => {
+      const { error } = await supabase
+        .from("slack_drafts")
+        .update(updates)
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["slack-drafts"] });
     },
   });
 }

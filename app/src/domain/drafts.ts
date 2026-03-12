@@ -1,3 +1,11 @@
+export interface DraftReviewMetadata {
+  warnings?: string[];
+  rationale?: string[];
+  approvedBody?: string;
+  approvedSubject?: string;
+  approvedToEmail?: string;
+}
+
 export interface DraftReply {
   id: string;
   userId: string;
@@ -15,13 +23,7 @@ export interface DraftReply {
   status: "pending" | "accepted" | "edited" | "sent" | "discarded";
   editedBody: string | null;
   acceptedAt: string | null;
-  reviewMetadata: {
-    warnings?: string[];
-    rationale?: string[];
-    approvedBody?: string;
-    approvedSubject?: string;
-    approvedToEmail?: string;
-  } | null;
+  reviewMetadata: DraftReviewMetadata | null;
   sentAt: string | null;
   discardedAt: string | null;
 
@@ -29,6 +31,29 @@ export interface DraftReply {
   promptTokens: number | null;
   completionTokens: number | null;
 
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SlackDraft {
+  id: string;
+  userId: string;
+  activityId: string | null;
+  signalId: string | null;
+
+  channelId: string;
+  channelLabel: string | null;
+  message: string;
+  editedMessage: string | null;
+  threadTs: string | null;
+
+  status: "pending" | "accepted" | "edited" | "sent" | "discarded";
+  acceptedAt: string | null;
+  reviewMetadata: DraftReviewMetadata | null;
+  sentAt: string | null;
+  discardedAt: string | null;
+
+  modelUsed: string;
   createdAt: string;
   updatedAt: string;
 }
