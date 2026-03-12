@@ -25,6 +25,8 @@ export interface DraftReply {
   acceptedAt: string | null;
   reviewMetadata: DraftReviewMetadata | null;
   sentAt: string | null;
+  sentMessageId: string | null;
+  sentThreadId: string | null;
   discardedAt: string | null;
 
   modelUsed: string;

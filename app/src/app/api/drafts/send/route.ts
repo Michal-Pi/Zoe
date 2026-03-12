@@ -83,6 +83,8 @@ export async function POST(request: NextRequest) {
       .update({
         status: "sent",
         sent_at: new Date().toISOString(),
+        sent_message_id: result.messageId,
+        sent_thread_id: result.threadId,
       })
       .eq("id", draftId);
 

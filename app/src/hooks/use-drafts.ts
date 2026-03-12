@@ -21,6 +21,8 @@ function mapRow(row: Record<string, unknown>): DraftReply {
     acceptedAt: row.accepted_at as string | null,
     reviewMetadata: row.review_metadata as DraftReply["reviewMetadata"],
     sentAt: row.sent_at as string | null,
+    sentMessageId: row.sent_message_id as string | null,
+    sentThreadId: row.sent_thread_id as string | null,
     discardedAt: row.discarded_at as string | null,
     modelUsed: row.model_used as string,
     promptTokens: row.prompt_tokens as number | null,
@@ -117,6 +119,8 @@ interface DraftContext {
   recipientDomain: string | null;
   userDomain: string | null;
   signal: {
+    externalId: string | null;
+    threadId: string | null;
     title: string | null;
     snippet: string | null;
     senderName: string | null;
@@ -126,6 +130,14 @@ interface DraftContext {
     receivedAt: string | null;
     source: string | null;
   } | null;
+  threadSignals: Array<{
+    id: string;
+    title: string | null;
+    snippet: string | null;
+    senderName: string | null;
+    senderEmail: string | null;
+    receivedAt: string | null;
+  }>;
   activity: {
     title: string;
     score: number;
@@ -163,7 +175,7 @@ export function useDraftContext(draft: DraftReply | null) {
             ? supabase
                 .from("signals")
                 .select(
-                  "title, snippet, sender_name, sender_email, urgency_score, requires_response, received_at, source"
+                  "external_id, thread_id, title, snippet, sender_name, sender_email, urgency_score, requires_response, received_at, source"
                 )
                 .eq("id", draft.signalId)
                 .single()
@@ -186,6 +198,27 @@ export function useDraftContext(draft: DraftReply | null) {
             : Promise.resolve({ data: null, error: null }),
         ]);
 
+      let threadSignals: DraftContext["threadSignals"] = [];
+      if (signalResult.data?.thread_id) {
+        const { data: relatedSignals } = await supabase
+          .from("signals")
+          .select("id, title, snippet, sender_name, sender_email, received_at")
+          .eq("thread_id", signalResult.data.thread_id)
+          .eq("source", "gmail")
+          .order("received_at", { ascending: true })
+          .limit(8);
+
+        threadSignals =
+          relatedSignals?.map((signal) => ({
+            id: signal.id,
+            title: signal.title,
+            snippet: signal.snippet,
+            senderName: signal.sender_name,
+            senderEmail: signal.sender_email,
+            receivedAt: signal.received_at,
+          })) ?? [];
+      }
+
       const userEmail = auth.user?.email ?? null;
 
       return {
@@ -194,6 +227,8 @@ export function useDraftContext(draft: DraftReply | null) {
         userDomain: getDomain(userEmail),
         signal: signalResult.data
           ? {
+              externalId: signalResult.data.external_id,
+              threadId: signalResult.data.thread_id,
               title: signalResult.data.title,
               snippet: signalResult.data.snippet,
               senderName: signalResult.data.sender_name,
@@ -204,6 +239,7 @@ export function useDraftContext(draft: DraftReply | null) {
               source: signalResult.data.source,
             }
           : null,
+        threadSignals,
         activity: activityResult.data
           ? {
               title: activityResult.data.title,

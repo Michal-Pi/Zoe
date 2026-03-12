@@ -161,6 +161,7 @@ export function DraftReviewPanel({
   };
 
   const displayBody = isEditing ? editedBody : (draft.editedBody ?? draft.body);
+  const timeline = buildDraftTimeline(draft, context);
 
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -315,6 +316,84 @@ export function DraftReviewPanel({
 
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                Traceability
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                    Source thread
+                  </p>
+                  <div className="mt-2 space-y-1 text-sm text-foreground">
+                    <p>
+                      Thread ID:{" "}
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {context?.signal?.threadId ?? "Not linked"}
+                      </span>
+                    </p>
+                    <p>
+                      Message ID:{" "}
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {context?.signal?.externalId ?? "Not linked"}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                    Sent message
+                  </p>
+                  <div className="mt-2 space-y-1 text-sm text-foreground">
+                    <p>
+                      Thread ID:{" "}
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {draft.sentThreadId ?? "Not sent yet"}
+                      </span>
+                    </p>
+                    <p>
+                      Message ID:{" "}
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {draft.sentMessageId ?? "Not sent yet"}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {timeline.length ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  Thread timeline
+                </p>
+                <div className="space-y-3 rounded-lg border border-border bg-card p-4">
+                  {timeline.map((item, index) => (
+                    <div key={`${item.label}-${index}`} className="flex gap-3">
+                      <div className="mt-1 h-2.5 w-2.5 rounded-full bg-primary/70" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium text-foreground">
+                            {item.label}
+                          </p>
+                          {item.at ? (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {new Date(item.at).toLocaleString()}
+                            </span>
+                          ) : null}
+                        </div>
+                        {item.description ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {item.description}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                 Draft body
               </p>
               {isEditing ? (
@@ -415,4 +494,90 @@ export function DraftReviewPanel({
       </SheetContent>
     </Sheet>
   );
+}
+
+function buildDraftTimeline(
+  draft: DraftReply,
+  context:
+    | {
+        signal: {
+          title: string | null;
+          snippet: string | null;
+          senderName: string | null;
+          senderEmail: string | null;
+          receivedAt: string | null;
+        } | null;
+        threadSignals: Array<{
+          id: string;
+          title: string | null;
+          senderName: string | null;
+          senderEmail: string | null;
+          receivedAt: string | null;
+          snippet: string | null;
+        }>;
+      }
+    | null
+    | undefined
+) {
+  const items: Array<{
+    label: string;
+    description: string | null;
+    at: string | null;
+  }> = [];
+
+  for (const signal of context?.threadSignals ?? []) {
+    items.push({
+      label: signal.title ?? "Inbound email",
+      description:
+        `${signal.senderName ?? signal.senderEmail ?? "Unknown sender"}${signal.snippet ? ` · ${signal.snippet}` : ""}`,
+      at: signal.receivedAt,
+    });
+  }
+
+  items.push({
+    label: "Draft created",
+    description: "Zoe created the first reviewable draft.",
+    at: draft.createdAt,
+  });
+
+  if (draft.editedBody && draft.editedBody !== draft.body) {
+    items.push({
+      label: "Draft revised",
+      description: "The draft body was edited before approval.",
+      at: draft.acceptedAt ?? draft.updatedAt,
+    });
+  }
+
+  if (draft.acceptedAt) {
+    items.push({
+      label: "Draft approved",
+      description: "Explicit human approval was recorded before sending.",
+      at: draft.acceptedAt,
+    });
+  }
+
+  if (draft.sentAt) {
+    items.push({
+      label: "Draft sent",
+      description: draft.sentMessageId
+        ? `Sent via Gmail as message ${draft.sentMessageId}.`
+        : "Sent via Gmail.",
+      at: draft.sentAt,
+    });
+  }
+
+  if (draft.discardedAt) {
+    items.push({
+      label: "Draft discarded",
+      description: "The draft was explicitly discarded.",
+      at: draft.discardedAt,
+    });
+  }
+
+  return items.sort((a, b) => {
+    if (!a.at && !b.at) return 0;
+    if (!a.at) return 1;
+    if (!b.at) return -1;
+    return new Date(a.at).getTime() - new Date(b.at).getTime();
+  });
 }
