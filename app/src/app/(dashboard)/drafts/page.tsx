@@ -13,11 +13,13 @@ import { withBasePath } from "@/lib/base-path";
 export default function DraftsPage() {
   const [selectedDraft, setSelectedDraft] = useState<DraftReply | null>(null);
   const [tab, setTab] = useState<"pending" | "sent" | "discarded">("pending");
+  const [sendingDraftId, setSendingDraftId] = useState<string | null>(null);
 
   const { data: drafts, isLoading } = useDrafts(tab);
   const updateDraft = useUpdateDraft();
 
   const handleSend = async (draft: DraftReply) => {
+    setSendingDraftId(draft.id);
     try {
       const res = await fetch(withBasePath("/api/drafts/send"), {
         method: "POST",
@@ -45,6 +47,8 @@ export default function DraftsPage() {
       toast.success("Email sent");
     } catch {
       toast.error("Failed to send email");
+    } finally {
+      setSendingDraftId(null);
     }
   };
 
@@ -91,6 +95,7 @@ export default function DraftsPage() {
         open={selectedDraft !== null}
         onClose={() => setSelectedDraft(null)}
         onSend={handleSend}
+        isSending={sendingDraftId === selectedDraft?.id}
       />
     </div>
   );

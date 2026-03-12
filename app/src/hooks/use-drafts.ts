@@ -52,6 +52,121 @@ export function useDrafts(status: DraftReply["status"] | "all" = "pending") {
   });
 }
 
+interface DraftContext {
+  userEmail: string | null;
+  recipientDomain: string | null;
+  userDomain: string | null;
+  signal: {
+    title: string | null;
+    snippet: string | null;
+    senderName: string | null;
+    senderEmail: string | null;
+    urgencyScore: number | null;
+    requiresResponse: boolean | null;
+    receivedAt: string | null;
+    source: string | null;
+  } | null;
+  activity: {
+    title: string;
+    score: number;
+    triggerDescription: string | null;
+    horizon: string | null;
+  } | null;
+  meeting: {
+    title: string;
+    startAt: string;
+    decisionDensity: string | null;
+    ownershipLoad: string | null;
+    efficiencyRisks: string[] | null;
+    prepTimeNeededMinutes: number | null;
+  } | null;
+}
+
+function getDomain(email: string | null | undefined): string | null {
+  if (!email || !email.includes("@")) return null;
+  return email.split("@")[1]?.toLowerCase() ?? null;
+}
+
+export function useDraftContext(draft: DraftReply | null) {
+  const supabase = createClient();
+
+  return useQuery({
+    queryKey: ["draft-context", draft?.id],
+    enabled: Boolean(draft),
+    queryFn: async (): Promise<DraftContext | null> => {
+      if (!draft) return null;
+
+      const [{ data: auth }, signalResult, activityResult, meetingResult] =
+        await Promise.all([
+          supabase.auth.getUser(),
+          draft.signalId
+            ? supabase
+                .from("signals")
+                .select(
+                  "title, snippet, sender_name, sender_email, urgency_score, requires_response, received_at, source"
+                )
+                .eq("id", draft.signalId)
+                .single()
+            : Promise.resolve({ data: null, error: null }),
+          draft.activityId
+            ? supabase
+                .from("activities")
+                .select("title, score, trigger_description, horizon")
+                .eq("id", draft.activityId)
+                .single()
+            : Promise.resolve({ data: null, error: null }),
+          draft.meetingId
+            ? supabase
+                .from("calendar_events")
+                .select(
+                  "title, start_at, decision_density, ownership_load, efficiency_risks, prep_time_needed_minutes"
+                )
+                .eq("id", draft.meetingId)
+                .single()
+            : Promise.resolve({ data: null, error: null }),
+        ]);
+
+      const userEmail = auth.user?.email ?? null;
+
+      return {
+        userEmail,
+        recipientDomain: getDomain(draft.toEmail),
+        userDomain: getDomain(userEmail),
+        signal: signalResult.data
+          ? {
+              title: signalResult.data.title,
+              snippet: signalResult.data.snippet,
+              senderName: signalResult.data.sender_name,
+              senderEmail: signalResult.data.sender_email,
+              urgencyScore: signalResult.data.urgency_score,
+              requiresResponse: signalResult.data.requires_response,
+              receivedAt: signalResult.data.received_at,
+              source: signalResult.data.source,
+            }
+          : null,
+        activity: activityResult.data
+          ? {
+              title: activityResult.data.title,
+              score: activityResult.data.score,
+              triggerDescription: activityResult.data.trigger_description,
+              horizon: activityResult.data.horizon,
+            }
+          : null,
+        meeting: meetingResult.data
+          ? {
+              title: meetingResult.data.title,
+              startAt: meetingResult.data.start_at,
+              decisionDensity: meetingResult.data.decision_density,
+              ownershipLoad: meetingResult.data.ownership_load,
+              efficiencyRisks: meetingResult.data.efficiency_risks,
+              prepTimeNeededMinutes: meetingResult.data.prep_time_needed_minutes,
+            }
+          : null,
+      };
+    },
+  });
+}
+
 export function useDraftCount() {
   const supabase = createClient();
 
