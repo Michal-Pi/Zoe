@@ -139,6 +139,35 @@ export function getChatTools(userId: string) {
       },
     },
 
+    get_top_email_signals: {
+      description:
+        "Get the highest-priority email signals that likely need a response.",
+      inputSchema: zodSchema(
+        z.object({
+          limit: z.number().int().min(1).max(10).default(3),
+        })
+      ),
+      execute: async ({ limit }: { limit: number }) => {
+        const supabase = await createServiceRoleClient();
+
+        const { data, error } = await supabase
+          .from("signals")
+          .select(
+            "id, title, snippet, sender_name, sender_email, urgency_score, received_at"
+          )
+          .eq("user_id", userId)
+          .eq("source", "gmail")
+          .eq("requires_response", true)
+          .not("classified_at", "is", null)
+          .order("urgency_score", { ascending: false, nullsFirst: false })
+          .order("received_at", { ascending: false })
+          .limit(limit);
+
+        if (error) return { error: error.message };
+        return { emails: data ?? [], count: data?.length ?? 0 };
+      },
+    },
+
     generate_meeting_brief: {
       description:
         "Generate a prep brief for a specific meeting, including related signals and suggested talking points.",
@@ -225,14 +254,38 @@ export function getChatTools(userId: string) {
         body: string;
         in_reply_to: string | null;
       }) => {
+        const supabase = await createServiceRoleClient();
+        const { data: draft, error } = await supabase
+          .from("draft_replies")
+          .insert({
+            user_id: userId,
+            signal_id: in_reply_to,
+            to_email: to,
+            subject,
+            body,
+            tone: "professional",
+            draft_type: "reply",
+            status: "pending",
+            model_used: "chat_tool",
+          })
+          .select("id")
+          .single();
+
+        if (error || !draft) {
+          return {
+            error: error?.message ?? "Failed to save email draft for review.",
+          };
+        }
+
         return {
-          status: "draft" as const,
+          status: "draft_saved" as const,
+          draft_id: draft.id,
           to,
           subject,
           body,
           in_reply_to,
           message:
-            "Draft ready. Present to user for review. If approved, use send_email.",
+            "Email draft saved to Drafts. Review and approve it there before sending.",
         };
       },
     },

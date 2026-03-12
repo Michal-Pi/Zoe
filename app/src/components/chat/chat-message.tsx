@@ -67,6 +67,7 @@ function ToolCard({
     search_signals: "Searching signals",
     get_todays_meetings: "Getting today's meetings",
     get_top_activities: "Getting top activities",
+    get_top_email_signals: "Finding top email",
     generate_meeting_brief: "Generating meeting brief",
     draft_email: "Drafting email",
     send_email: "Sending email",
@@ -76,19 +77,36 @@ function ToolCard({
 
   const label = toolLabels[invocation.toolName] ?? invocation.toolName;
   const isLoading = invocation.state !== "result";
+  const resultObject =
+    invocation.result && typeof invocation.result === "object"
+      ? (invocation.result as Record<string, unknown>)
+      : null;
+  const resultText =
+    typeof resultObject?.message === "string"
+      ? resultObject.message
+      : typeof resultObject?.note === "string"
+        ? resultObject.note
+        : typeof resultObject?.error === "string"
+          ? resultObject.error
+          : null;
 
   return (
     <Card className="border-border/50">
       <CardContent className="px-3 py-2">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <ToolIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>{label}</span>
-          {isLoading && (
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
-          )}
-          {!isLoading && (
-            <CheckIcon className="h-3.5 w-3.5 text-score-low" aria-hidden="true" />
-          )}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <ToolIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{label}</span>
+            {isLoading && (
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+            )}
+            {!isLoading && (
+              <CheckIcon className="h-3.5 w-3.5 text-score-low" aria-hidden="true" />
+            )}
+          </div>
+          {!isLoading && resultText ? (
+            <p className="text-xs text-foreground">{resultText}</p>
+          ) : null}
         </div>
       </CardContent>
     </Card>
