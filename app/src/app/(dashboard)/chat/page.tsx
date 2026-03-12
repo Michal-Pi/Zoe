@@ -102,10 +102,26 @@ export default function ChatPage() {
               ?.filter((p) => typeof p.type === "string" && p.type.startsWith("tool-"))
               .map((p) => {
                 const part = p as Record<string, unknown>;
+                const type = String(part.type ?? "");
                 return {
-                  toolName: String(part.toolName ?? "unknown"),
-                  state: String(part.state ?? "result"),
+                  toolName:
+                    typeof part.toolName === "string"
+                      ? part.toolName
+                      : type.startsWith("tool-")
+                        ? type.slice(5)
+                        : "unknown",
+                  state:
+                    typeof part.state === "string"
+                      ? part.state
+                      : typeof part.errorText === "string"
+                        ? "output-error"
+                        : part.output !== undefined
+                          ? "output-available"
+                          : "input-available",
+                  input: part.input,
                   result: part.output,
+                  errorText:
+                    typeof part.errorText === "string" ? part.errorText : undefined,
                 };
               });
 

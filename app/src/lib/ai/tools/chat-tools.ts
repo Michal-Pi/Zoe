@@ -164,7 +164,26 @@ export function getChatTools(userId: string) {
           .limit(limit);
 
         if (error) return { error: error.message };
-        return { emails: data ?? [], count: data?.length ?? 0 };
+
+        const emails = data ?? [];
+        const topEmail = emails[0] ?? null;
+
+        if (!topEmail) {
+          return {
+            emails,
+            count: 0,
+            topEmail: null,
+            message:
+              "I reviewed your recent email signals but did not find a clear high-priority email that needs a reply.",
+          };
+        }
+
+        return {
+          emails,
+          count: emails.length,
+          topEmail,
+          message: `I picked "${topEmail.title}" from ${topEmail.sender_name || topEmail.sender_email} as the highest-priority email to answer next.`,
+        };
       },
     },
 
@@ -284,6 +303,7 @@ export function getChatTools(userId: string) {
           subject,
           body,
           in_reply_to,
+          drafts_path: "/drafts",
           message:
             "Email draft saved to Drafts. Review and approve it there before sending.",
         };
