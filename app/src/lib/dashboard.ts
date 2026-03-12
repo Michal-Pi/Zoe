@@ -95,6 +95,7 @@ export function getMockDashboardData(): DashboardData {
     },
     interventions: generateInterventions(realityBrief),
     suggestions: [],
+    draftSuggestions: [],
     greeting: getGreeting(),
   };
 }

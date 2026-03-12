@@ -5,6 +5,7 @@ import { BehavioralSnapshotSection } from "@/components/dashboard/behavioral-sna
 import { InterventionsSection } from "@/components/dashboard/interventions";
 import { ConnectionBanner } from "@/components/dashboard/connection-banner";
 import { MeetingsAtRiskSection } from "@/components/dashboard/meetings-at-risk";
+import { DraftSuggestionsSection } from "@/components/dashboard/draft-suggestions";
 import { useDashboard } from "@/hooks/use-dashboard";
 import { useHasConnection } from "@/hooks/use-connections";
 
@@ -51,6 +52,12 @@ export default function DashboardPage() {
       />
 
       <MeetingsAtRiskSection hasCalendar={hasCalendar} />
+
+      <DraftSuggestionsSection
+        suggestions={dashboardData?.draftSuggestions ?? []}
+        loading={isLoading}
+        hasEmail={hasCalendar}
+      />
 
       {/* Section 2: Behavioral Snapshot */}
       <BehavioralSnapshotSection

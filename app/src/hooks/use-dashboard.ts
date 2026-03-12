@@ -9,6 +9,7 @@ import {
 } from "@/lib/dashboard";
 import type {
   DashboardData,
+  DraftSuggestion,
   RealityBrief,
   BehavioralSnapshot,
   TrendDirection,
@@ -78,6 +79,7 @@ export function useDashboard() {
         { count: activeSlackThreads },
         { count: unreadEmails },
         { count: openLoops },
+        { data: draftSuggestionsRaw },
       ] = await Promise.all([
         supabase
           .from("signals")
@@ -95,6 +97,18 @@ export function useDashboard() {
           .select("*", { count: "exact", head: true })
           .eq("requires_response", true)
           .lt("received_at", fortyEightHoursAgo),
+        supabase
+          .from("signals")
+          .select(
+            "id, title, snippet, sender_name, sender_email, urgency_score, received_at"
+          )
+          .eq("user_id", user.id)
+          .eq("source", "gmail")
+          .eq("requires_response", true)
+          .not("classified_at", "is", null)
+          .order("urgency_score", { ascending: false, nullsFirst: false })
+          .order("received_at", { ascending: false })
+          .limit(3),
       ]);
 
       const realityBrief: RealityBrief = {
@@ -190,11 +204,32 @@ export function useDashboard() {
         });
       }
 
+      const draftSuggestions: DraftSuggestion[] = (draftSuggestionsRaw ?? []).map(
+        (signal: {
+          id: string;
+          title: string | null;
+          snippet: string | null;
+          sender_name: string | null;
+          sender_email: string | null;
+          urgency_score: number | null;
+          received_at: string | null;
+        }) => ({
+          id: signal.id,
+          title: signal.title,
+          snippet: signal.snippet,
+          senderName: signal.sender_name,
+          senderEmail: signal.sender_email,
+          urgencyScore: signal.urgency_score,
+          receivedAt: signal.received_at,
+        })
+      );
+
       return {
         realityBrief,
         behavioralSnapshot,
         interventions: generateInterventions(realityBrief),
         suggestions,
+        draftSuggestions,
         greeting: getGreeting(),
       };
     },

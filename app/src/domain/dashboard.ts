@@ -37,10 +37,21 @@ export interface BehavioralSuggestionData {
   description: string;
 }
 
+export interface DraftSuggestion {
+  id: string;
+  title: string | null;
+  snippet: string | null;
+  senderName: string | null;
+  senderEmail: string | null;
+  urgencyScore: number | null;
+  receivedAt: string | null;
+}
+
 export interface DashboardData {
   realityBrief: RealityBrief;
   behavioralSnapshot: BehavioralSnapshot | null;
   interventions: Intervention[];
   suggestions: BehavioralSuggestionData[];
+  draftSuggestions: DraftSuggestion[];
   greeting: string;
 }
