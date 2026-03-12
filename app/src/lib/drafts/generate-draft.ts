@@ -16,7 +16,7 @@ interface SignalForDraft {
   title: string | null;
   snippet: string | null;
   sender_name: string | null;
-  sender_email: string;
+  sender_email: string | null;
   thread_id: string | null;
   urgency_score: number | null;
   requires_response: boolean | null;
@@ -100,6 +100,13 @@ export async function generateDraftsForUser(
 
   for (const signal of needsDraft) {
     try {
+      if (!signal.sender_email) {
+        console.warn(
+          `Skipping draft generation for signal ${signal.id}: missing sender_email`
+        );
+        continue;
+      }
+
       // Fetch full email body via Gmail API
       let body: string | null = null;
       try {
