@@ -86,6 +86,11 @@ export function DraftReviewPanel({
     );
   }
 
+  const reviewWarnings =
+    draft.reviewMetadata?.warnings?.length ? draft.reviewMetadata.warnings : warnings;
+  const reviewRationale =
+    draft.reviewMetadata?.rationale?.length ? draft.reviewMetadata.rationale : rationale;
+
   const handleEdit = () => {
     setEditedBody(draft.editedBody ?? draft.body);
     setIsEditing(true);
@@ -99,6 +104,7 @@ export function DraftReviewPanel({
           edited_body: editedBody,
           status: "edited",
           accepted_at: null,
+          review_metadata: null,
         },
       },
       {
@@ -111,12 +117,20 @@ export function DraftReviewPanel({
   };
 
   const handleApprove = () => {
+    const approvedBody = draft.editedBody ?? draft.body;
     updateDraft.mutate(
       {
         id: draft.id,
         updates: {
           status: "accepted",
           accepted_at: new Date().toISOString(),
+          review_metadata: {
+            warnings,
+            rationale,
+            approvedBody,
+            approvedSubject: draft.subject,
+            approvedToEmail: draft.toEmail,
+          },
         },
       },
       {
@@ -187,13 +201,13 @@ export function DraftReviewPanel({
               ) : null}
             </div>
 
-            {warnings.length ? (
+            {reviewWarnings.length ? (
               <div className="space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                   Send warnings
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {warnings.map((warning) => (
+                  {reviewWarnings.map((warning) => (
                     <span
                       key={warning}
                       className="inline-flex items-center rounded-md bg-destructive/10 px-2.5 py-1 text-xs text-destructive"
@@ -236,7 +250,7 @@ export function DraftReviewPanel({
                 Why Zoe drafted this
               </p>
               <div className="space-y-2 rounded-lg border border-border bg-card p-4">
-                {rationale.map((item) => (
+                {reviewRationale.map((item) => (
                   <p key={item} className="text-sm text-foreground">
                     {item}
                   </p>
@@ -315,6 +329,32 @@ export function DraftReviewPanel({
                 </div>
               )}
             </div>
+
+            {draft.editedBody && draft.editedBody !== draft.body && !isEditing ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  Edited vs original
+                </p>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-lg border border-border bg-card p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Original draft
+                    </p>
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                      {draft.body}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+                      Current version
+                    </p>
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                      {draft.editedBody}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </ScrollArea>
 

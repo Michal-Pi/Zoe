@@ -15,6 +15,13 @@ export interface DraftReply {
   status: "pending" | "accepted" | "edited" | "sent" | "discarded";
   editedBody: string | null;
   acceptedAt: string | null;
+  reviewMetadata: {
+    warnings?: string[];
+    rationale?: string[];
+    approvedBody?: string;
+    approvedSubject?: string;
+    approvedToEmail?: string;
+  } | null;
   sentAt: string | null;
   discardedAt: string | null;
 

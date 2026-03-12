@@ -19,6 +19,7 @@ function mapRow(row: Record<string, unknown>): DraftReply {
     status: row.status as DraftReply["status"],
     editedBody: row.edited_body as string | null,
     acceptedAt: row.accepted_at as string | null,
+    reviewMetadata: row.review_metadata as DraftReply["reviewMetadata"],
     sentAt: row.sent_at as string | null,
     discardedAt: row.discarded_at as string | null,
     modelUsed: row.model_used as string,
@@ -206,6 +207,7 @@ export function useUpdateDraft() {
         status: DraftReply["status"];
         edited_body: string | null;
         accepted_at: string | null;
+        review_metadata: DraftReply["reviewMetadata"] | null;
         sent_at: string | null;
         discarded_at: string | null;
       }>;
