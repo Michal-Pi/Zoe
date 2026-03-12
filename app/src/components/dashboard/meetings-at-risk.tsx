@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { CalendarEvent } from "@/domain/calendar";
 import { useCalendarEvents } from "@/hooks/use-calendar";
 import { PrepBlockAction } from "@/components/calendar/prep-block-action";
+import { MeetingBriefAction } from "@/components/calendar/meeting-brief-action";
 
 const riskLabels: Record<string, string> = {
   no_agenda: "No agenda",
@@ -65,11 +66,6 @@ function getRiskReasons(event: CalendarEvent): string[] {
   }
 
   return Array.from(reasons).slice(0, 3);
-}
-
-function getPrepPrompt(event: CalendarEvent): string {
-  const start = formatTime(event.startAt);
-  return `Prep me for "${event.title}" at ${start}. Include risks, related context, talking points, and what I should decide or send afterward.`;
 }
 
 export function MeetingsAtRiskSection({ hasCalendar }: { hasCalendar: boolean }) {
@@ -162,11 +158,7 @@ export function MeetingsAtRiskSection({ hasCalendar }: { hasCalendar: boolean })
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <Button asChild size="sm">
-                      <Link href={`/chat?prompt=${encodeURIComponent(getPrepPrompt(event))}`}>
-                        Prep me
-                      </Link>
-                    </Button>
+                    <MeetingBriefAction event={event} label="Prep me" />
                     <PrepBlockAction event={event} label="Block prep time" />
                     <Button asChild size="sm" variant="outline">
                       <Link href="/calendar">Review calendar</Link>
