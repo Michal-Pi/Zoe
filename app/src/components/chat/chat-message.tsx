@@ -24,6 +24,11 @@ export function ChatMessage({
   toolInvocations,
 }: ChatMessageProps) {
   const isUser = role === "user";
+  const fallbackContent =
+    !isUser && !content.trim()
+      ? buildFallbackAssistantText(toolInvocations)
+      : null;
+  const displayContent = content || fallbackContent || "";
 
   return (
     <div
@@ -40,7 +45,7 @@ export function ChatMessage({
           <ToolCard key={i} invocation={invocation} />
         ))}
 
-        {content && (
+        {displayContent && (
           <div
             className={cn(
               "rounded-xl px-4 py-2.5 text-sm",
@@ -49,7 +54,7 @@ export function ChatMessage({
                 : "bg-muted text-foreground"
             )}
           >
-            <div className="whitespace-pre-wrap prose prose-sm prose-neutral dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{content}</div>
+            <div className="whitespace-pre-wrap prose prose-sm prose-neutral dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{displayContent}</div>
           </div>
         )}
       </div>
@@ -114,14 +119,22 @@ function ToolCard({
             </div>
           ) : null}
           {presentation.preview ? (
-            <div className="rounded-md border border-border/60 bg-muted/40 p-2">
-              <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                Draft preview
-              </p>
-              <p className="mt-1 whitespace-pre-wrap text-xs text-foreground">
-                {presentation.preview}
-              </p>
-            </div>
+            presentation.previewKind === "email" ? (
+              <EmailDraftPreviewCard
+                subject={presentation.title}
+                to={presentation.meta.find((item) => item.startsWith("To ")) ?? null}
+                body={presentation.preview}
+              />
+            ) : (
+              <div className="rounded-md border border-border/60 bg-muted/40 p-2">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                  Draft preview
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-xs text-foreground">
+                  {presentation.preview}
+                </p>
+              </div>
+            )
           ) : null}
           {presentation.action ? (
             <div className="pt-1">
@@ -160,6 +173,7 @@ function getToolPresentation(invocation: {
       meta: [] as string[],
       action: null as null | { href: string; label: string },
       preview: null as string | null,
+      previewKind: null as null | "email" | "text",
       tone: "error" as const,
     };
   }
@@ -187,6 +201,7 @@ function getToolPresentation(invocation: {
           meta: [] as string[],
           action: null,
           preview: null,
+          previewKind: null,
           tone: "default" as const,
         };
       }
@@ -202,6 +217,7 @@ function getToolPresentation(invocation: {
           meta: [] as string[],
           action: null,
           preview: null,
+          previewKind: null,
           tone: "default" as const,
         };
       }
@@ -225,6 +241,7 @@ function getToolPresentation(invocation: {
         ].filter(Boolean) as string[],
         action: null,
         preview: null,
+        previewKind: null,
         tone: "default" as const,
       };
     }
@@ -246,6 +263,7 @@ function getToolPresentation(invocation: {
           meta: [] as string[],
           action: null,
           preview: null,
+          previewKind: null,
           tone: "default" as const,
         };
       }
@@ -261,6 +279,7 @@ function getToolPresentation(invocation: {
           meta: [] as string[],
           action: null,
           preview: null,
+          previewKind: null,
           tone: typeof result?.error === "string" ? ("error" as const) : ("default" as const),
         };
       }
@@ -282,6 +301,7 @@ function getToolPresentation(invocation: {
         ].filter(Boolean) as string[],
         action: null,
         preview: typeof signal.body === "string" ? signal.body.slice(0, 240) : null,
+        previewKind: "text" as const,
         tone: "default" as const,
       };
     }
@@ -295,6 +315,7 @@ function getToolPresentation(invocation: {
           meta: [] as string[],
           action: null,
           preview: null,
+          previewKind: null,
           tone: "default" as const,
         };
       }
@@ -317,6 +338,7 @@ function getToolPresentation(invocation: {
             label: "Open Drafts",
           },
           preview: typeof result.body_preview === "string" ? result.body_preview : null,
+          previewKind: "email" as const,
           tone: "default" as const,
         };
       }
@@ -333,6 +355,7 @@ function getToolPresentation(invocation: {
           meta: [] as string[],
           action: null,
           preview: null,
+          previewKind: null,
           tone: "default" as const,
         };
       }
@@ -353,6 +376,7 @@ function getToolPresentation(invocation: {
             label: "Open Drafts",
           },
           preview: typeof result.message === "string" ? result.message.slice(0, 240) : null,
+          previewKind: "text" as const,
           tone: "default" as const,
         };
       }
@@ -375,9 +399,84 @@ function getToolPresentation(invocation: {
     meta: [] as string[],
     action: null as null | { href: string; label: string },
     preview: null as string | null,
+    previewKind: null as null | "email" | "text",
     tone:
       typeof result?.error === "string" ? ("error" as const) : ("default" as const),
   };
+}
+
+function buildFallbackAssistantText(
+  toolInvocations:
+    | {
+        toolName: string;
+        state: string;
+        input?: unknown;
+        result?: unknown;
+        errorText?: string;
+      }[]
+    | undefined
+) {
+  if (!toolInvocations?.length) return null;
+
+  const lastCompleted = [...toolInvocations]
+    .reverse()
+    .find(
+      (invocation) =>
+        invocation.state === "output-available" ||
+        invocation.state === "output-error"
+    );
+
+  if (!lastCompleted) return null;
+
+  const result =
+    lastCompleted.result && typeof lastCompleted.result === "object"
+      ? (lastCompleted.result as Record<string, unknown>)
+      : null;
+
+  if (lastCompleted.toolName === "draft_email" && result?.status === "draft_saved") {
+    const subject =
+      typeof result.subject === "string" ? result.subject : "your draft";
+    return `I saved a draft reply for "${subject}" in Drafts. Review it before sending.`;
+  }
+
+  if (
+    lastCompleted.toolName === "draft_slack_message" &&
+    result?.status === "draft_saved"
+  ) {
+    return "I saved a Slack draft in Drafts. Review it before sending.";
+  }
+
+  if (typeof result?.message === "string") return result.message;
+  if (typeof result?.note === "string") return result.note;
+  if (typeof result?.error === "string") return result.error;
+  if (lastCompleted.errorText) return lastCompleted.errorText;
+
+  return null;
+}
+
+function EmailDraftPreviewCard({
+  subject,
+  to,
+  body,
+}: {
+  subject: string | null;
+  to: string | null;
+  body: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-background p-3 shadow-sm">
+      <div className="space-y-1 border-b border-border/60 pb-2">
+        <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          Draft email
+        </p>
+        <p className="text-sm font-medium text-foreground">
+          {subject || "Untitled draft"}
+        </p>
+        {to ? <p className="text-xs text-muted-foreground">{to}</p> : null}
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-xs text-foreground">{body}</p>
+    </div>
+  );
 }
 
 function getToolLabel(toolName: string) {
