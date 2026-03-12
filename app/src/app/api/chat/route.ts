@@ -111,7 +111,7 @@ Guidelines:
 - When the user asks about meetings, use get_todays_meetings to get real data.
 - When they ask about emails/messages, use search_signals.
 - When they ask for the most important email to answer, use get_top_email_signals.
-- When they ask to draft a reply to the most important email, first call get_top_email_signals with limit 1, then immediately call draft_email using that email and tell the user which email you chose.
+- When they ask to draft a reply to the most important email, first call get_top_email_signals with limit 1, then call get_email_thread_context for the chosen signal, then call draft_email using that context and tell the user which email you chose.
 - When they ask to draft a reply, use draft_email or draft_slack_message.
 - When they need meeting prep, use generate_meeting_brief.
 - Always reference specific data — don't make up meetings or signals.

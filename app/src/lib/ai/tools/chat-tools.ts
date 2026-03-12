@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { zodSchema } from "ai";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { sendEmail } from "@/lib/integrations/gmail";
+import { getMessageBody, sendEmail } from "@/lib/integrations/gmail";
 import { sendSlackMessage } from "@/lib/integrations/slack";
 import { findAvailableTimes } from "@/lib/calendar/find-available-times";
 
@@ -153,7 +153,7 @@ export function getChatTools(userId: string) {
         const { data, error } = await supabase
           .from("signals")
           .select(
-            "id, title, snippet, sender_name, sender_email, urgency_score, received_at"
+            "id, external_id, thread_id, title, snippet, sender_name, sender_email, urgency_score, received_at"
           )
           .eq("user_id", userId)
           .eq("source", "gmail")
@@ -183,6 +183,81 @@ export function getChatTools(userId: string) {
           count: emails.length,
           topEmail,
           message: `I picked "${topEmail.title}" from ${topEmail.sender_name || topEmail.sender_email} as the highest-priority email to answer next.`,
+        };
+      },
+    },
+
+    get_email_thread_context: {
+      description:
+        "Fetch the selected email plus recent thread context so Zoe can draft a better reply.",
+      inputSchema: zodSchema(
+        z.object({
+          signal_id: z.string().describe("The signal ID of the email to review"),
+        })
+      ),
+      execute: async ({ signal_id }: { signal_id: string }) => {
+        const supabase = await createServiceRoleClient();
+
+        const { data: signal, error } = await supabase
+          .from("signals")
+          .select(
+            "id, external_id, thread_id, title, snippet, sender_name, sender_email, urgency_score, received_at"
+          )
+          .eq("user_id", userId)
+          .eq("id", signal_id)
+          .eq("source", "gmail")
+          .single();
+
+        if (error || !signal) {
+          return {
+            error: error?.message ?? "I could not find that email in your synced signals.",
+          };
+        }
+
+        let body: string | null = null;
+        const connectionId = await getGoogleConnectionId(userId);
+        if (connectionId && signal.external_id) {
+          try {
+            body = await getMessageBody(connectionId, signal.external_id);
+          } catch (fetchError) {
+            console.error("Failed to fetch email body for chat context:", fetchError);
+          }
+        }
+
+        let relatedSignals: Array<Record<string, unknown>> = [];
+        if (signal.thread_id) {
+          const { data: threadSignals } = await supabase
+            .from("signals")
+            .select(
+              "id, title, snippet, sender_name, sender_email, received_at, urgency_score"
+            )
+            .eq("user_id", userId)
+            .eq("source", "gmail")
+            .eq("thread_id", signal.thread_id)
+            .order("received_at", { ascending: false })
+            .limit(5);
+
+          relatedSignals = threadSignals ?? [];
+        }
+
+        const summary =
+          relatedSignals.length > 1
+            ? `I reviewed "${signal.title}" and found ${relatedSignals.length} recent emails in the same thread.`
+            : `I reviewed "${signal.title}" and this looks like a single-message thread.`;
+
+        return {
+          signal: {
+            id: signal.id,
+            title: signal.title,
+            sender_name: signal.sender_name,
+            sender_email: signal.sender_email,
+            urgency_score: signal.urgency_score,
+            received_at: signal.received_at,
+            snippet: signal.snippet,
+            body,
+          },
+          relatedSignals,
+          message: summary,
         };
       },
     },
@@ -304,6 +379,7 @@ export function getChatTools(userId: string) {
           body,
           in_reply_to,
           drafts_path: "/drafts",
+          body_preview: body.slice(0, 280),
           message:
             "Email draft saved to Drafts. Review and approve it there before sending.",
         };

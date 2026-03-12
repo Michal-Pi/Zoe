@@ -113,6 +113,16 @@ function ToolCard({
               ))}
             </div>
           ) : null}
+          {presentation.preview ? (
+            <div className="rounded-md border border-border/60 bg-muted/40 p-2">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                Draft preview
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-xs text-foreground">
+                {presentation.preview}
+              </p>
+            </div>
+          ) : null}
           {presentation.action ? (
             <div className="pt-1">
               <Button asChild size="sm" variant="outline">
@@ -149,6 +159,7 @@ function getToolPresentation(invocation: {
       description: invocation.errorText ?? "The action did not complete.",
       meta: [] as string[],
       action: null as null | { href: string; label: string },
+      preview: null as string | null,
       tone: "error" as const,
     };
   }
@@ -175,6 +186,7 @@ function getToolPresentation(invocation: {
               : "Scanning your highest-priority email now.",
           meta: [] as string[],
           action: null,
+          preview: null,
           tone: "default" as const,
         };
       }
@@ -189,6 +201,7 @@ function getToolPresentation(invocation: {
               : "I did not find a high-priority email that clearly needs a reply.",
           meta: [] as string[],
           action: null,
+          preview: null,
           tone: "default" as const,
         };
       }
@@ -211,6 +224,64 @@ function getToolPresentation(invocation: {
             : null,
         ].filter(Boolean) as string[],
         action: null,
+        preview: null,
+        tone: "default" as const,
+      };
+    }
+
+    case "get_email_thread_context": {
+      const signal =
+        result?.signal && typeof result.signal === "object"
+          ? (result.signal as Record<string, unknown>)
+          : null;
+      const relatedSignals = Array.isArray(result?.relatedSignals)
+        ? (result.relatedSignals as Record<string, unknown>[])
+        : [];
+
+      if (invocation.state === "input-available" || invocation.state === "input-streaming") {
+        return {
+          label: "Reviewing thread context",
+          title: "Pulling email thread context",
+          description: "Zoe is reviewing the selected email and nearby thread messages.",
+          meta: [] as string[],
+          action: null,
+          preview: null,
+          tone: "default" as const,
+        };
+      }
+
+      if (!signal) {
+        return {
+          label: "Reviewing thread context",
+          title: "Thread context unavailable",
+          description:
+            typeof result?.error === "string"
+              ? result.error
+              : "I could not load enough thread context for this email.",
+          meta: [] as string[],
+          action: null,
+          preview: null,
+          tone: typeof result?.error === "string" ? ("error" as const) : ("default" as const),
+        };
+      }
+
+      return {
+        label: "Reviewed thread context",
+        title: String(signal.title ?? "Selected email"),
+        description:
+          typeof result?.message === "string"
+            ? result.message
+            : typeof signal.snippet === "string"
+              ? signal.snippet
+              : null,
+        meta: [
+          signal.sender_name || signal.sender_email
+            ? `From ${String(signal.sender_name ?? signal.sender_email)}`
+            : null,
+          relatedSignals.length > 0 ? `${relatedSignals.length} related thread emails` : null,
+        ].filter(Boolean) as string[],
+        action: null,
+        preview: typeof signal.body === "string" ? signal.body.slice(0, 240) : null,
         tone: "default" as const,
       };
     }
@@ -223,6 +294,7 @@ function getToolPresentation(invocation: {
           description: "Zoe is turning the selected email into a reviewable draft.",
           meta: [] as string[],
           action: null,
+          preview: null,
           tone: "default" as const,
         };
       }
@@ -244,6 +316,7 @@ function getToolPresentation(invocation: {
             ),
             label: "Open Drafts",
           },
+          preview: typeof result.body_preview === "string" ? result.body_preview : null,
           tone: "default" as const,
         };
       }
@@ -259,6 +332,7 @@ function getToolPresentation(invocation: {
           description: "Zoe is preparing a Slack draft for review.",
           meta: [] as string[],
           action: null,
+          preview: null,
           tone: "default" as const,
         };
       }
@@ -278,6 +352,7 @@ function getToolPresentation(invocation: {
             href: withBasePath("/drafts"),
             label: "Open Drafts",
           },
+          preview: typeof result.message === "string" ? result.message.slice(0, 240) : null,
           tone: "default" as const,
         };
       }
@@ -299,6 +374,7 @@ function getToolPresentation(invocation: {
     description: null as string | null,
     meta: [] as string[],
     action: null as null | { href: string; label: string },
+    preview: null as string | null,
     tone:
       typeof result?.error === "string" ? ("error" as const) : ("default" as const),
   };
@@ -310,6 +386,7 @@ function getToolLabel(toolName: string) {
     get_todays_meetings: "Getting today's meetings",
     get_top_activities: "Getting top activities",
     get_top_email_signals: "Reviewing emails",
+    get_email_thread_context: "Reviewing thread context",
     generate_meeting_brief: "Generating meeting brief",
     draft_email: "Drafting email",
     send_email: "Sending email",
