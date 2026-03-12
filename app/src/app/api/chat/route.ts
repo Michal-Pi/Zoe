@@ -1,4 +1,5 @@
 import {
+  generateObject,
   createUIMessageStream,
   createUIMessageStreamResponse,
   stepCountIs,
@@ -6,6 +7,9 @@ import {
 } from "ai";
 import { models } from "@/lib/ai/providers";
 import { getChatTools } from "@/lib/ai/tools/chat-tools";
+import { draftReplySchema } from "@/lib/ai/schemas/draft-reply";
+import { buildDraftReplyPrompt } from "@/lib/ai/prompts/generate-draft-reply";
+import { getMessageBody } from "@/lib/integrations/gmail";
 import {
   createServiceRoleClient,
   createServerSupabaseClient,
@@ -127,6 +131,52 @@ export async function POST(request: Request) {
           `- [${a.score}] ${a.title} (${a.horizon}, ${a.status})`
       )
       .join("\n") || "No activities yet";
+
+  if (
+    lastUserMsg?.role === "user" &&
+    typeof lastUserMsg.content === "string" &&
+    isTopEmailDraftRequest(lastUserMsg.content)
+  ) {
+    console.log(`[chat:${requestId}] using deterministic top-email draft path`);
+    const directReply = await createDraftForTopEmail({
+      userId: user.id,
+      requestId,
+      serviceClient,
+    });
+
+    if (convId) {
+      const { error: storeErr } = await serviceClient.from("chat_messages").insert({
+        conversation_id: convId,
+        user_id: user.id,
+        role: "assistant",
+        content: directReply,
+      });
+      if (storeErr) {
+        console.error(`[chat:${requestId}] failed to store direct assistant message`, storeErr);
+      }
+    }
+
+    const directStream = createUIMessageStream({
+      execute: ({ writer }) => {
+        writer.write({ type: "text-start", id: `direct-${requestId}` });
+        writer.write({
+          type: "text-delta",
+          id: `direct-${requestId}`,
+          delta: directReply,
+        });
+        writer.write({ type: "text-end", id: `direct-${requestId}` });
+      },
+      onError: (error) => {
+        console.error(
+          `[chat:${requestId}] direct path ui stream error`,
+          error instanceof Error ? error.stack ?? error.message : String(error)
+        );
+        return "Chat stream failed";
+      },
+    });
+
+    return createUIMessageStreamResponse({ stream: directStream });
+  }
 
   const systemPrompt = `You are Zoe, a personal assistant for a busy professional. You help them manage their work by searching signals, generating meeting briefs, drafting communications, and providing productivity insights.
 
@@ -402,4 +452,152 @@ function buildFallbackAssistantText(
   if (typeof output?.error === "string") return output.error;
 
   return "";
+}
+
+function isTopEmailDraftRequest(input: string) {
+  const normalized = input.toLowerCase();
+  const asksForDraft =
+    normalized.includes("draft") &&
+    (normalized.includes("email") || normalized.includes("reply"));
+  const asksForTopEmail =
+    normalized.includes("most important") ||
+    normalized.includes("most critical") ||
+    normalized.includes("highest-priority") ||
+    normalized.includes("highest priority");
+
+  return asksForDraft && asksForTopEmail;
+}
+
+async function createDraftForTopEmail({
+  userId,
+  requestId,
+  serviceClient,
+}: {
+  userId: string;
+  requestId: string;
+  serviceClient: Awaited<ReturnType<typeof createServiceRoleClient>>;
+}) {
+  const [{ data: priorities }, { data: profile }, { data: signal, error: signalError }] =
+    await Promise.all([
+      serviceClient
+        .from("strategic_priorities")
+        .select("title")
+        .eq("user_id", userId)
+        .order("sort_order"),
+      serviceClient
+        .from("profiles")
+        .select("writing_style_notes")
+        .eq("id", userId)
+        .single(),
+      serviceClient
+        .from("signals")
+        .select(
+          "id, external_id, thread_id, title, snippet, sender_name, sender_email, urgency_score, received_at"
+        )
+        .eq("user_id", userId)
+        .eq("source", "gmail")
+        .eq("requires_response", true)
+        .not("classified_at", "is", null)
+        .not("sender_email", "is", null)
+        .order("urgency_score", { ascending: false, nullsFirst: false })
+        .order("received_at", { ascending: false })
+        .limit(1)
+        .single(),
+    ]);
+
+  if (signalError || !signal) {
+    console.error(`[chat:${requestId}] no top email signal found`, signalError);
+    return "I couldn’t find a clear high-priority email that needs a reply right now.";
+  }
+
+  if (!signal.sender_email) {
+    return `I found "${signal.title ?? "(no subject)"}", but it doesn’t have a usable reply address, so I did not create a draft.`;
+  }
+
+  const { data: connection } = await serviceClient
+    .from("integration_connections")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("provider", "google")
+    .eq("status", "active")
+    .limit(1)
+    .single();
+
+  let body: string | null = null;
+  if (connection?.id && signal.external_id) {
+    try {
+      body = await getMessageBody(connection.id, signal.external_id);
+    } catch (error) {
+      console.error(
+        `[chat:${requestId}] failed to fetch top email body`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  let threadContext: string | null = null;
+  if (signal.thread_id) {
+    const { data: threadSignals } = await serviceClient
+      .from("signals")
+      .select("title, snippet, sender_name, sender_email, received_at")
+      .eq("user_id", userId)
+      .eq("source", "gmail")
+      .eq("thread_id", signal.thread_id)
+      .order("received_at", { ascending: true })
+      .limit(5);
+
+    threadContext =
+      threadSignals
+        ?.map((item) => {
+          const sender = item.sender_name ?? item.sender_email ?? "Unknown sender";
+          const subject = item.title ?? "(no subject)";
+          const snippet = item.snippet ?? "";
+          return `${sender} — ${subject}\n${snippet}`.trim();
+        })
+        .join("\n\n---\n\n") ?? null;
+  }
+
+  const prompt = buildDraftReplyPrompt(
+    {
+      senderName: signal.sender_name,
+      senderEmail: signal.sender_email,
+      subject: signal.title ?? "(no subject)",
+      snippet: signal.snippet,
+      body,
+      threadContext,
+    },
+    priorities?.map((item) => item.title) ?? [],
+    profile?.writing_style_notes ?? null
+  );
+
+  const { object, usage } = await generateObject({
+    model: models.standard,
+    schema: draftReplySchema,
+    prompt,
+  });
+
+  const { data: draft, error: insertError } = await serviceClient
+    .from("draft_replies")
+    .insert({
+      user_id: userId,
+      signal_id: signal.id,
+      to_email: signal.sender_email,
+      subject: object.subject,
+      body: object.body,
+      tone: object.tone,
+      draft_type: "reply",
+      status: "pending",
+      model_used: "claude-sonnet-4-6",
+      prompt_tokens: usage?.inputTokens ?? null,
+      completion_tokens: usage?.outputTokens ?? null,
+    })
+    .select("id")
+    .single();
+
+  if (insertError || !draft) {
+    console.error(`[chat:${requestId}] failed to save top email draft`, insertError);
+    return `I drafted a reply for "${signal.title ?? "(no subject)"}", but I failed to save it to Drafts.`;
+  }
+
+  return `I saved a draft reply for "${signal.title ?? "(no subject)"}" from ${signal.sender_name ?? signal.sender_email} in Drafts. Review it before sending.`;
 }
