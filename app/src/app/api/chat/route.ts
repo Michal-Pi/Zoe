@@ -1,4 +1,9 @@
-import { stepCountIs, streamText } from "ai";
+import {
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  stepCountIs,
+  streamText,
+} from "ai";
 import { models } from "@/lib/ai/providers";
 import { getChatTools } from "@/lib/ai/tools/chat-tools";
 import {
@@ -196,6 +201,9 @@ Guidelines:
     })
   );
 
+  let finalAssistantText = "";
+  let fallbackAssistantText = "";
+
   const result = streamText({
     model: models.standard,
     system: systemPrompt,
@@ -227,6 +235,9 @@ Guidelines:
       );
     },
     onStepFinish: ({ stepNumber, finishReason, text, toolResults }) => {
+      if (!fallbackAssistantText) {
+        fallbackAssistantText = buildFallbackAssistantText(toolResults);
+      }
       console.log(
         `[chat:${requestId}] step finish`,
         JSON.stringify({
@@ -241,11 +252,22 @@ Guidelines:
       );
     },
     onFinish: ({ text, finishReason, steps }) => {
+      finalAssistantText = text ?? "";
+      if (!finalAssistantText) {
+        for (const step of [...steps].reverse()) {
+          const candidate = buildFallbackAssistantText(step.toolResults);
+          if (candidate) {
+            fallbackAssistantText = candidate;
+            break;
+          }
+        }
+      }
       console.log(
         `[chat:${requestId}] stream finish`,
         JSON.stringify({
           finishReason,
           textPreview: text?.slice(0, 200) ?? null,
+          fallbackPreview: fallbackAssistantText.slice(0, 200) || null,
           steps: steps.length,
         })
       );
@@ -258,19 +280,55 @@ Guidelines:
     },
   });
 
-  // Store assistant response after streaming completes
-  Promise.resolve(result.text)
-    .then(async (text: string) => {
+  const uiStream = createUIMessageStream({
+    execute: async ({ writer }) => {
+      writer.merge(
+        result.toUIMessageStream({
+          onError: (error) => {
+            console.error(
+              `[chat:${requestId}] merged ui stream error`,
+              error instanceof Error ? error.stack ?? error.message : String(error)
+            );
+            return "Chat stream failed";
+          },
+        })
+      );
+
+      await result.consumeStream({
+        onError: (error) => {
+          console.error(
+            `[chat:${requestId}] consume stream error`,
+            error instanceof Error ? error.stack ?? error.message : String(error)
+          );
+        },
+      });
+
+      if (!finalAssistantText && fallbackAssistantText) {
+        const textId = `fallback-${requestId}`;
+        writer.write({ type: "text-start", id: textId });
+        writer.write({
+          type: "text-delta",
+          id: textId,
+          delta: fallbackAssistantText,
+        });
+        writer.write({ type: "text-end", id: textId });
+        finalAssistantText = fallbackAssistantText;
+        console.log(
+          `[chat:${requestId}] emitted fallback assistant text`,
+          JSON.stringify({ textPreview: fallbackAssistantText.slice(0, 200) })
+        );
+      }
+      const textToStore = finalAssistantText || fallbackAssistantText;
       console.log(
         `[chat:${requestId}] result text resolved`,
-        JSON.stringify({ textPreview: text?.slice(0, 200) ?? null })
+        JSON.stringify({ textPreview: textToStore?.slice(0, 200) ?? null })
       );
-      if (convId && text) {
+      if (convId && textToStore) {
         const { error: storeErr } = await serviceClient.from("chat_messages").insert({
           conversation_id: convId,
           user_id: user.id,
           role: "assistant",
-          content: text,
+          content: textToStore,
         });
         if (storeErr) {
           console.error(`[chat:${requestId}] failed to store assistant message`, storeErr);
@@ -278,20 +336,17 @@ Guidelines:
           console.log(`[chat:${requestId}] assistant message stored`);
         }
       }
-    })
-    .catch((err: unknown) => {
-      console.error(`[chat:${requestId}] failed to read streaming result`, err);
-    });
-
-  return result.toUIMessageStreamResponse({
+    },
     onError: (error) => {
       console.error(
-        `[chat:${requestId}] ui stream error`,
+        `[chat:${requestId}] ui stream wrapper error`,
         error instanceof Error ? error.stack ?? error.message : String(error)
       );
       return "Chat stream failed";
     },
   });
+
+  return createUIMessageStreamResponse({ stream: uiStream });
 }
 
 function summarizeForLog(value: unknown): unknown {
@@ -309,4 +364,42 @@ function summarizeForLog(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function buildFallbackAssistantText(
+  toolResults:
+    | Array<{
+        toolName: string;
+        output: unknown;
+      }>
+    | undefined
+) {
+  if (!toolResults?.length) return "";
+
+  const lastTool = [...toolResults].reverse().find(Boolean);
+  if (!lastTool) return "";
+
+  const output =
+    lastTool.output && typeof lastTool.output === "object"
+      ? (lastTool.output as Record<string, unknown>)
+      : null;
+
+  if (lastTool.toolName === "draft_email" && output?.status === "draft_saved") {
+    const subject =
+      typeof output.subject === "string" ? output.subject : "your draft";
+    return `I saved a draft reply for "${subject}" in Drafts. Review it before sending.`;
+  }
+
+  if (
+    lastTool.toolName === "draft_slack_message" &&
+    output?.status === "draft_saved"
+  ) {
+    return "I saved a Slack draft in Drafts. Review it before sending.";
+  }
+
+  if (typeof output?.message === "string") return output.message;
+  if (typeof output?.note === "string") return output.note;
+  if (typeof output?.error === "string") return output.error;
+
+  return "";
 }
