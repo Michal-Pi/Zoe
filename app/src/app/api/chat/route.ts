@@ -214,13 +214,15 @@ Guidelines:
         })
       );
     },
-    experimental_onToolCallFinish: ({ toolCall, toolResult }) => {
+    experimental_onToolCallFinish: ({ toolCall, success, output, error, durationMs }) => {
       console.log(
         `[chat:${requestId}] tool callback finish`,
         JSON.stringify({
           toolName: toolCall.toolName,
           toolCallId: toolCall.toolCallId,
-          result: summarizeForLog(toolResult),
+          success,
+          durationMs,
+          result: summarizeForLog(success ? output : error),
         })
       );
     },
