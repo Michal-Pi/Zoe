@@ -10,6 +10,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ExperimentControls } from "@/components/dashboard/experiment-controls";
+import { ExperimentResults } from "@/components/dashboard/experiment-results";
 
 interface UsageRow {
   operation: string;
@@ -49,10 +51,27 @@ function useAdminUsage() {
   });
 }
 
+function useActiveExperimentId() {
+  const { data } = useQuery({
+    queryKey: ["admin", "experiments"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/experiments");
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data as {
+        experiments: Array<{ id: string; status: string }>;
+      };
+    },
+    refetchInterval: 30_000,
+  });
+  return data?.experiments?.find((e) => e.status === "active")?.id ?? null;
+}
+
 export default function AdminPage() {
   const isAdmin = useIsAdmin();
   const router = useRouter();
   const { data, isLoading, isError } = useAdminUsage();
+  const activeExperimentId = useActiveExperimentId();
 
   if (!isAdmin) {
     router.replace("/dashboard");
@@ -386,30 +405,9 @@ export default function AdminPage() {
         </Card>
       )}
 
-      {/* Placeholder sections for future phases */}
-      <Card className="border-dashed">
-        <CardHeader>
-          <CardTitle className="text-muted-foreground">
-            Experiment Controls
-          </CardTitle>
-          <CardDescription>
-            A/B/C route assignment, shadow routing, and experiment config will
-            appear here (Phase 3).
-          </CardDescription>
-        </CardHeader>
-      </Card>
-
-      <Card className="border-dashed">
-        <CardHeader>
-          <CardTitle className="text-muted-foreground">
-            Triage Evaluation
-          </CardTitle>
-          <CardDescription>
-            Route comparison, heuristic accuracy, disagreement mining, and
-            calibration tools will appear here (Phase 5).
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      {/* Experiment framework */}
+      <ExperimentControls />
+      <ExperimentResults experimentId={activeExperimentId} />
 
       <Card className="border-dashed">
         <CardHeader>

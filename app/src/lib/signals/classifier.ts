@@ -17,10 +17,25 @@ import {
 } from "@/lib/integrations/gmail-labels";
 import {
   classifyBatchWithHeuristics,
-  type HeuristicResult,
 } from "@/lib/scoring/heuristic-classifier";
+import { resolveExperiment } from "@/lib/experiments/resolver";
+import { recordTriageResults } from "@/lib/experiments/record-result";
+import type { Arm, RouteResult } from "@/lib/experiments/types";
 
 const BATCH_SIZE = 15;
+
+type Signal = {
+  id: string;
+  source: string;
+  source_type: string;
+  external_id?: string;
+  title: string | null;
+  snippet: string | null;
+  sender_name: string | null;
+  sender_email: string | null;
+  received_at: string;
+  labels: string[] | null;
+};
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -31,6 +46,254 @@ function clampUrgencyScore(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value)));
 }
+
+// ── Classification result from any route ─────────────────────────
+
+interface ClassificationOutput {
+  signal_id: string;
+  urgency_score: number;
+  topic_cluster: string;
+  ownership_signal: "owner" | "contributor" | "observer";
+  requires_response: boolean;
+  escalation_level: "none" | "mild" | "high";
+  confidence: number;
+  usedHeuristic: boolean;
+  usedLLM: boolean;
+  modelName: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+}
+
+// ── Route A: heuristic pre-filter + LLM for ambiguous ────────────
+
+async function runRouteA(
+  signals: Signal[],
+  priorityTitles: string[],
+  userId: string
+): Promise<ClassificationOutput[]> {
+  const results: ClassificationOutput[] = [];
+
+  // Heuristic pre-filter
+  const { accepted: heuristicAccepted, needsLLM: llmSignals } =
+    classifyBatchWithHeuristics(
+      signals.map((s) => ({
+        id: s.id,
+        source: s.source,
+        source_type: s.source_type,
+        title: s.title,
+        snippet: s.snippet,
+        sender_name: s.sender_name,
+        sender_email: s.sender_email,
+        received_at: s.received_at,
+        labels: s.labels,
+      })),
+      priorityTitles
+    );
+
+  // Heuristic results
+  for (const r of heuristicAccepted) {
+    results.push({
+      signal_id: r.signal_id,
+      urgency_score: r.urgency_score,
+      topic_cluster: r.topic_cluster,
+      ownership_signal: r.ownership_signal,
+      requires_response: r.requires_response,
+      escalation_level: r.escalation_level,
+      confidence: r.confidence,
+      usedHeuristic: true,
+      usedLLM: false,
+      modelName: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      latencyMs: 0,
+    });
+  }
+
+  // LLM for low-confidence signals
+  const llmSignalIds = new Set(llmSignals.map((s) => s.id));
+  const signalsForLLM = signals.filter((s) => llmSignalIds.has(s.id));
+  const llmResults = await runLLMClassification(signalsForLLM, priorityTitles, userId);
+  results.push(...llmResults);
+
+  return results;
+}
+
+// ── Route C: full LLM for all signals (no heuristic) ─────────────
+
+async function runRouteC(
+  signals: Signal[],
+  priorityTitles: string[],
+  userId: string
+): Promise<ClassificationOutput[]> {
+  return runLLMClassification(signals, priorityTitles, userId);
+}
+
+// ── Shared LLM classification logic ──────────────────────────────
+
+async function runLLMClassification(
+  signals: Signal[],
+  priorityTitles: string[],
+  userId: string
+): Promise<ClassificationOutput[]> {
+  if (!signals.length) return [];
+
+  const results: ClassificationOutput[] = [];
+  const redis = getRedis();
+  const CACHE_TTL = 86400;
+
+  for (let i = 0; i < signals.length; i += BATCH_SIZE) {
+    const batch = signals.slice(i, i + BATCH_SIZE);
+
+    // Check cache
+    const cachedResults: Map<
+      string,
+      BatchClassification["classifications"][number]
+    > = new Map();
+    const uncachedSignals: Signal[] = [];
+
+    if (redis) {
+      for (const signal of batch) {
+        const cacheKey = `classify:${signal.source}:${signal.id}`;
+        try {
+          const cached = await redis.get<
+            BatchClassification["classifications"][number]
+          >(cacheKey);
+          if (cached) {
+            cachedResults.set(signal.id, cached);
+          } else {
+            uncachedSignals.push(signal);
+          }
+        } catch {
+          uncachedSignals.push(signal);
+        }
+      }
+    } else {
+      uncachedSignals.push(...batch);
+    }
+
+    // LLM call for uncached
+    let llmClassifications: BatchClassification["classifications"] = [];
+    let batchInputTokens = 0;
+    let batchOutputTokens = 0;
+    let batchLatencyMs = 0;
+
+    if (uncachedSignals.length > 0) {
+      const prompt = buildClassificationPrompt(
+        uncachedSignals.map((s) => ({
+          id: s.id,
+          source: s.source,
+          sourceType: s.source_type,
+          title: s.title,
+          snippet: s.snippet,
+          senderName: s.sender_name,
+          senderEmail: s.sender_email,
+          receivedAt: s.received_at,
+          labels: s.labels,
+        })),
+        priorityTitles
+      );
+
+      const startTime = Date.now();
+      const { object, usage: classifyUsage } = await generateObject({
+        model: models.fast,
+        schema: batchClassificationSchema,
+        prompt,
+      });
+      batchLatencyMs = Date.now() - startTime;
+      batchInputTokens = classifyUsage?.inputTokens ?? 0;
+      batchOutputTokens = classifyUsage?.outputTokens ?? 0;
+
+      if (classifyUsage) {
+        logLLMUsage({
+          model: "claude-haiku-4-5-latest",
+          operation: "classify_signals",
+          inputTokens: batchInputTokens,
+          outputTokens: batchOutputTokens,
+          userId,
+          metadata: { batchSize: uncachedSignals.length },
+        });
+      }
+
+      llmClassifications = object.classifications;
+
+      // Cache results
+      if (redis) {
+        for (const classification of llmClassifications) {
+          const signal = uncachedSignals.find(
+            (s) => s.id === classification.signal_id
+          );
+          if (signal) {
+            const cacheKey = `classify:${signal.source}:${signal.id}`;
+            try {
+              await redis.set(cacheKey, classification, { ex: CACHE_TTL });
+            } catch {
+              // Non-critical cache write failure
+            }
+          }
+        }
+      }
+    }
+
+    // Merge cached + fresh
+    const allClassifications = [
+      ...llmClassifications,
+      ...Array.from(cachedResults.values()),
+    ];
+
+    // Per-signal token attribution (approximate)
+    const tokensPerSignal =
+      uncachedSignals.length > 0
+        ? {
+            input: Math.round(batchInputTokens / uncachedSignals.length),
+            output: Math.round(batchOutputTokens / uncachedSignals.length),
+            latency: Math.round(batchLatencyMs / uncachedSignals.length),
+          }
+        : { input: 0, output: 0, latency: 0 };
+
+    for (const c of allClassifications) {
+      const wasCached = cachedResults.has(c.signal_id);
+      results.push({
+        signal_id: c.signal_id,
+        urgency_score: c.urgency_score,
+        topic_cluster: c.topic_cluster,
+        ownership_signal: c.ownership_signal,
+        requires_response: c.requires_response,
+        escalation_level: c.escalation_level,
+        confidence: 0.5, // LLM doesn't return confidence; use baseline
+        usedHeuristic: false,
+        usedLLM: !wasCached,
+        modelName: wasCached ? "cache" : "claude-haiku-4-5-latest",
+        inputTokens: wasCached ? 0 : tokensPerSignal.input,
+        outputTokens: wasCached ? 0 : tokensPerSignal.output,
+        latencyMs: wasCached ? 0 : tokensPerSignal.latency,
+      });
+    }
+  }
+
+  return results;
+}
+
+// ── Run a route by arm name ──────────────────────────────────────
+
+async function runRoute(
+  arm: Arm,
+  signals: Signal[],
+  priorityTitles: string[],
+  userId: string
+): Promise<ClassificationOutput[]> {
+  switch (arm) {
+    case "A":
+      return runRouteA(signals, priorityTitles, userId);
+    case "B":
+      // Route B (snippet-only) not yet implemented — falls back to Route C
+      return runRouteC(signals, priorityTitles, userId);
+    case "C":
+      return runRouteC(signals, priorityTitles, userId);
+  }
+}
+
+// ── Main entry point ─────────────────────────────────────────────
 
 /** Classify unclassified signals for a user */
 export async function classifySignals(userId: string): Promise<{
@@ -49,7 +312,7 @@ export async function classifySignals(userId: string): Promise<{
     .eq("user_id", userId)
     .is("classified_at", null)
     .order("received_at", { ascending: false })
-    .limit(BATCH_SIZE * 3); // Process up to 3 batches per run
+    .limit(BATCH_SIZE * 3);
 
   if (error || !signals?.length) {
     return {
@@ -68,263 +331,143 @@ export async function classifySignals(userId: string): Promise<{
 
   const priorityTitles = priorities?.map((p) => p.title) ?? [];
 
-  const redis = getRedis();
-  const CACHE_TTL = 86400; // 24 hours
+  // Resolve experiment assignment
+  const decision = await resolveExperiment(userId);
 
   let classified = 0;
   let errors = 0;
   const errorDetails: string[] = [];
 
-  // ── Phase 2: Heuristic pre-filter ──────────────────────────────
-  // Run deterministic heuristics on all signals first.
-  // High-confidence results skip Haiku entirely.
-  const { accepted: heuristicAccepted, needsLLM: llmSignals } =
-    classifyBatchWithHeuristics(
-      signals.map((s) => ({
-        id: s.id,
-        source: s.source,
-        source_type: s.source_type,
-        title: s.title,
-        snippet: s.snippet,
-        sender_name: s.sender_name,
-        sender_email: s.sender_email,
-        received_at: s.received_at,
-        labels: s.labels,
-      })),
-      priorityTitles
+  // Run primary route
+  let primaryResults: ClassificationOutput[];
+  try {
+    primaryResults = await runRoute(
+      decision.primaryArm,
+      signals,
+      priorityTitles,
+      userId
     );
+  } catch (err) {
+    return {
+      classified: 0,
+      errors: signals.length,
+      errorDetails: [`Primary route ${decision.primaryArm} failed: ${getErrorMessage(err)}`],
+    };
+  }
 
-  // Write heuristic-classified signals directly to DB
-  if (heuristicAccepted.length > 0) {
-    const heuristicClassifications: BatchClassification["classifications"] = [];
+  // Write primary results to signals table
+  const writtenClassifications: BatchClassification["classifications"] = [];
 
-    for (const result of heuristicAccepted) {
-      const { error: updateError } = await supabase
-        .from("signals")
-        .update({
-          urgency_score: clampUrgencyScore(result.urgency_score),
-          topic_cluster: result.topic_cluster,
-          ownership_signal: result.ownership_signal,
-          requires_response: result.requires_response,
-          escalation_level: result.escalation_level,
-          classified_at: new Date().toISOString(),
-        })
-        .eq("id", result.signal_id)
-        .eq("user_id", userId);
+  for (const result of primaryResults) {
+    const { error: updateError } = await supabase
+      .from("signals")
+      .update({
+        urgency_score: clampUrgencyScore(result.urgency_score),
+        topic_cluster: result.topic_cluster,
+        ownership_signal: result.ownership_signal,
+        requires_response: result.requires_response,
+        escalation_level: result.escalation_level,
+        classified_at: new Date().toISOString(),
+      })
+      .eq("id", result.signal_id)
+      .eq("user_id", userId);
 
-      if (updateError) {
-        const message = `heuristic signal update failed for ${result.signal_id}: ${getErrorMessage(updateError)}`;
-        errorDetails.push(message);
-        errors++;
-      } else {
-        classified++;
-        heuristicClassifications.push({
-          signal_id: result.signal_id,
-          urgency_score: result.urgency_score,
-          topic_cluster: result.topic_cluster,
-          ownership_signal: result.ownership_signal,
-          requires_response: result.requires_response,
-          escalation_level: result.escalation_level,
-        });
-      }
+    if (updateError) {
+      const message = `signal update failed for ${result.signal_id}: ${getErrorMessage(updateError)}`;
+      errorDetails.push(message);
+      errors++;
+    } else {
+      classified++;
+      writtenClassifications.push({
+        signal_id: result.signal_id,
+        urgency_score: result.urgency_score,
+        topic_cluster: result.topic_cluster,
+        ownership_signal: result.ownership_signal,
+        requires_response: result.requires_response,
+        escalation_level: result.escalation_level,
+      });
     }
+  }
 
-    // Apply Gmail labels to heuristic-classified signals
-    const heuristicBatchSignals = signals.filter((s) =>
-      heuristicAccepted.some((h) => h.signal_id === s.id)
-    );
-    await applyGmailLabels(
-      userId,
-      heuristicBatchSignals,
-      heuristicClassifications,
-      supabase
-    );
+  // Apply Gmail labels (primary only)
+  await applyGmailLabels(userId, signals, writtenClassifications, supabase);
 
-    // Log heuristic usage (zero LLM tokens)
+  // Log heuristic usage separately for monitoring
+  const heuristicCount = primaryResults.filter((r) => r.usedHeuristic).length;
+  if (heuristicCount > 0) {
     logLLMUsage({
       model: "heuristic",
       operation: "classify_heuristic",
       inputTokens: 0,
       outputTokens: 0,
       userId,
-      metadata: {
-        count: heuristicAccepted.length,
-        skippedLLM: true,
-      },
+      metadata: { count: heuristicCount, skippedLLM: true },
     });
   }
 
-  // ── LLM classification for low-confidence signals ──────────────
-  // Re-map back to the original signal objects for the LLM path
-  const llmSignalIds = new Set(llmSignals.map((s) => s.id));
-  const signalsForLLM = signals.filter((s) => llmSignalIds.has(s.id));
+  // Record primary triage results
+  if (decision.experimentId) {
+    recordTriageResults({
+      experimentId: decision.experimentId,
+      userId,
+      arm: decision.primaryArm,
+      isShadow: false,
+      results: primaryResults.map(toRouteResult),
+    });
+  }
 
-  for (let i = 0; i < signalsForLLM.length; i += BATCH_SIZE) {
-    const batch = signalsForLLM.slice(i, i + BATCH_SIZE);
-
-    try {
-      // Check cache for each signal in the batch
-      const cachedResults: Map<
-        string,
-        BatchClassification["classifications"][number]
-      > = new Map();
-      const uncachedSignals: typeof batch = [];
-
-      if (redis) {
-        for (const signal of batch) {
-          const cacheKey = `classify:${signal.source}:${signal.id}`;
-          let cached;
-          try {
-            cached = await redis.get<
-              BatchClassification["classifications"][number]
-            >(cacheKey);
-          } catch (err) {
-            const message = `redis.get failed for ${cacheKey}: ${getErrorMessage(err)}`;
-            console.error("Classification cache read error:", {
-              userId,
-              signalId: signal.id,
-              cacheKey,
-              error: getErrorMessage(err),
-            });
-            errorDetails.push(message);
-            throw err;
-          }
-          if (cached) {
-            cachedResults.set(signal.id, cached);
-          } else {
-            uncachedSignals.push(signal);
-          }
-        }
-      } else {
-        uncachedSignals.push(...batch);
-      }
-
-      // Call LLM only for uncached signals
-      let llmClassifications: BatchClassification["classifications"] = [];
-
-      if (uncachedSignals.length > 0) {
-        const prompt = buildClassificationPrompt(
-          uncachedSignals.map((s) => ({
-            id: s.id,
-            source: s.source,
-            sourceType: s.source_type,
-            title: s.title,
-            snippet: s.snippet,
-            senderName: s.sender_name,
-            senderEmail: s.sender_email,
-            receivedAt: s.received_at,
-            labels: s.labels,
-          })),
-          priorityTitles
+  // Fire-and-forget shadow run (never writes to signals, never applies labels)
+  if (decision.experimentId && decision.shadowArm) {
+    const shadowArm = decision.shadowArm;
+    const expId = decision.experimentId;
+    Promise.resolve().then(async () => {
+      try {
+        const shadowResults = await runRoute(
+          shadowArm,
+          signals,
+          priorityTitles,
+          userId
         );
-
-        let object;
-        try {
-          let classifyUsage;
-          ({ object, usage: classifyUsage } = await generateObject({
-            model: models.fast,
-            schema: batchClassificationSchema,
-            prompt,
-          }));
-          if (classifyUsage) {
-            logLLMUsage({
-              model: "claude-haiku-4-5-latest",
-              operation: "classify_signals",
-              inputTokens: classifyUsage.inputTokens ?? 0,
-              outputTokens: classifyUsage.outputTokens ?? 0,
-              userId,
-              metadata: { batchSize: uncachedSignals.length },
-            });
-          }
-        } catch (err) {
-          const message = `generateObject failed for batch starting ${batch[0]?.id}: ${getErrorMessage(err)}`;
-          console.error("Classification model error:", {
-            userId,
-            batchSignalIds: batch.map((signal) => signal.id),
-            uncachedSignalIds: uncachedSignals.map((signal) => signal.id),
-            error: getErrorMessage(err),
-          });
-          errorDetails.push(message);
-          throw err;
-        }
-
-        llmClassifications = object.classifications;
-
-        // Cache new LLM results
-        if (redis) {
-          for (const classification of llmClassifications) {
-            const signal = uncachedSignals.find(
-              (s) => s.id === classification.signal_id
-            );
-            if (signal) {
-              const cacheKey = `classify:${signal.source}:${signal.id}`;
-              try {
-                await redis.set(cacheKey, classification, { ex: CACHE_TTL });
-              } catch (err) {
-                const message = `redis.set failed for ${cacheKey}: ${getErrorMessage(err)}`;
-                console.error("Classification cache write error:", {
-                  userId,
-                  signalId: signal.id,
-                  cacheKey,
-                  error: getErrorMessage(err),
-                });
-                errorDetails.push(message);
-                throw err;
-              }
-            }
-          }
-        }
+        recordTriageResults({
+          experimentId: expId,
+          userId,
+          arm: shadowArm,
+          isShadow: true,
+          results: shadowResults.map(toRouteResult),
+        });
+      } catch (err) {
+        console.error("Shadow route failed (non-blocking):", getErrorMessage(err));
       }
-
-      // Merge cached + fresh results
-      const allClassifications = [
-        ...llmClassifications,
-        ...Array.from(cachedResults.values()),
-      ];
-
-      // Update each signal with classification results
-      for (const classification of allClassifications) {
-        const { signal_id, ...fields } = classification;
-        const { error: updateError } = await supabase
-          .from("signals")
-          .update({
-            urgency_score: clampUrgencyScore(fields.urgency_score),
-            topic_cluster: fields.topic_cluster,
-            ownership_signal: fields.ownership_signal,
-            requires_response: fields.requires_response,
-            escalation_level: fields.escalation_level,
-            classified_at: new Date().toISOString(),
-          })
-          .eq("id", signal_id)
-          .eq("user_id", userId);
-
-        if (updateError) {
-          const message = `signal update failed for ${signal_id}: ${getErrorMessage(updateError)}`;
-          console.error("Classification signal update error:", {
-            userId,
-            signalId: signal_id,
-            error: getErrorMessage(updateError),
-          });
-          errorDetails.push(message);
-          errors++;
-        } else {
-          classified++;
-        }
-      }
-
-      // Apply Gmail labels to classified email signals
-      await applyGmailLabels(userId, batch, allClassifications, supabase);
-    } catch (err) {
-      console.error("Classification batch error:", {
-        userId,
-        batchSignalIds: batch.map((signal) => signal.id),
-        error: getErrorMessage(err),
-      });
-      errors += batch.length;
-    }
+    });
   }
 
   return { classified, errors, errorDetails: errorDetails.slice(0, 10) };
+}
+
+function toRouteResult(c: ClassificationOutput): RouteResult {
+  // Cost estimation: Haiku pricing as of 2025
+  const HAIKU_INPUT_COST = 0.25 / 1_000_000; // $0.25/1M input tokens
+  const HAIKU_OUTPUT_COST = 1.25 / 1_000_000; // $1.25/1M output tokens
+
+  return {
+    signalId: c.signal_id,
+    urgencyScore: c.urgency_score,
+    topicCluster: c.topic_cluster,
+    ownershipSignal: c.ownership_signal,
+    requiresResponse: c.requires_response,
+    escalationLevel: c.escalation_level,
+    confidence: c.confidence,
+    usedHeuristic: c.usedHeuristic,
+    usedSnippetModel: false,
+    usedFullModel: c.usedLLM,
+    modelName: c.modelName,
+    inputTokens: c.inputTokens,
+    outputTokens: c.outputTokens,
+    estimatedCostUsd:
+      c.inputTokens * HAIKU_INPUT_COST + c.outputTokens * HAIKU_OUTPUT_COST,
+    latencyMs: c.latencyMs,
+    reasonCodes: c.usedHeuristic ? ["heuristic_accepted"] : ["llm_classified"],
+  };
 }
 
 /** Apply Zoe Gmail labels to classified email signals (best-effort, non-blocking) */
@@ -334,12 +477,10 @@ async function applyGmailLabels(
   classifications: BatchClassification["classifications"],
   supabase: Awaited<ReturnType<typeof createServiceRoleClient>>
 ): Promise<void> {
-  // Only process Gmail signals
   const gmailSignals = batch.filter((s) => s.source === "gmail" && s.external_id);
   if (!gmailSignals.length) return;
 
   try {
-    // Get user's active Google connection
     const { data: connection } = await supabase
       .from("integration_connections")
       .select("id")
@@ -351,14 +492,12 @@ async function applyGmailLabels(
 
     if (!connection) return;
 
-    // Get or create label IDs
     let labelIds = await getCachedLabelIds(connection.id);
     if (!labelIds) {
       labelIds = await ensureZoeLabels(connection.id);
       await cacheLabelIds(connection.id, labelIds);
     }
 
-    // Apply labels to each classified Gmail signal
     for (const signal of gmailSignals) {
       const classification = classifications.find(
         (c) => c.signal_id === signal.id
@@ -380,7 +519,6 @@ async function applyGmailLabels(
       );
     }
   } catch (err) {
-    // Label application is best-effort — don't fail classification
     console.error("Gmail label sync error:", err);
   }
 }
