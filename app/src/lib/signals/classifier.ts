@@ -15,6 +15,10 @@ import {
   getCachedLabelIds,
   cacheLabelIds,
 } from "@/lib/integrations/gmail-labels";
+import {
+  classifyBatchWithHeuristics,
+  type HeuristicResult,
+} from "@/lib/scoring/heuristic-classifier";
 
 const BATCH_SIZE = 15;
 
@@ -71,9 +75,92 @@ export async function classifySignals(userId: string): Promise<{
   let errors = 0;
   const errorDetails: string[] = [];
 
-  // Process in batches
-  for (let i = 0; i < signals.length; i += BATCH_SIZE) {
-    const batch = signals.slice(i, i + BATCH_SIZE);
+  // ── Phase 2: Heuristic pre-filter ──────────────────────────────
+  // Run deterministic heuristics on all signals first.
+  // High-confidence results skip Haiku entirely.
+  const { accepted: heuristicAccepted, needsLLM: llmSignals } =
+    classifyBatchWithHeuristics(
+      signals.map((s) => ({
+        id: s.id,
+        source: s.source,
+        source_type: s.source_type,
+        title: s.title,
+        snippet: s.snippet,
+        sender_name: s.sender_name,
+        sender_email: s.sender_email,
+        received_at: s.received_at,
+        labels: s.labels,
+      })),
+      priorityTitles
+    );
+
+  // Write heuristic-classified signals directly to DB
+  if (heuristicAccepted.length > 0) {
+    const heuristicClassifications: BatchClassification["classifications"] = [];
+
+    for (const result of heuristicAccepted) {
+      const { error: updateError } = await supabase
+        .from("signals")
+        .update({
+          urgency_score: clampUrgencyScore(result.urgency_score),
+          topic_cluster: result.topic_cluster,
+          ownership_signal: result.ownership_signal,
+          requires_response: result.requires_response,
+          escalation_level: result.escalation_level,
+          classified_at: new Date().toISOString(),
+        })
+        .eq("id", result.signal_id)
+        .eq("user_id", userId);
+
+      if (updateError) {
+        const message = `heuristic signal update failed for ${result.signal_id}: ${getErrorMessage(updateError)}`;
+        errorDetails.push(message);
+        errors++;
+      } else {
+        classified++;
+        heuristicClassifications.push({
+          signal_id: result.signal_id,
+          urgency_score: result.urgency_score,
+          topic_cluster: result.topic_cluster,
+          ownership_signal: result.ownership_signal,
+          requires_response: result.requires_response,
+          escalation_level: result.escalation_level,
+        });
+      }
+    }
+
+    // Apply Gmail labels to heuristic-classified signals
+    const heuristicBatchSignals = signals.filter((s) =>
+      heuristicAccepted.some((h) => h.signal_id === s.id)
+    );
+    await applyGmailLabels(
+      userId,
+      heuristicBatchSignals,
+      heuristicClassifications,
+      supabase
+    );
+
+    // Log heuristic usage (zero LLM tokens)
+    logLLMUsage({
+      model: "heuristic",
+      operation: "classify_heuristic",
+      inputTokens: 0,
+      outputTokens: 0,
+      userId,
+      metadata: {
+        count: heuristicAccepted.length,
+        skippedLLM: true,
+      },
+    });
+  }
+
+  // ── LLM classification for low-confidence signals ──────────────
+  // Re-map back to the original signal objects for the LLM path
+  const llmSignalIds = new Set(llmSignals.map((s) => s.id));
+  const signalsForLLM = signals.filter((s) => llmSignalIds.has(s.id));
+
+  for (let i = 0; i < signalsForLLM.length; i += BATCH_SIZE) {
+    const batch = signalsForLLM.slice(i, i + BATCH_SIZE);
 
     try {
       // Check cache for each signal in the batch
