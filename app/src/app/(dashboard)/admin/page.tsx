@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { ExperimentControls } from "@/components/dashboard/experiment-controls";
 import { ExperimentResults } from "@/components/dashboard/experiment-results";
+import { withBasePath } from "@/lib/base-path";
 
 interface UsageRow {
   operation: string;
@@ -42,7 +43,7 @@ function useAdminUsage() {
   return useQuery({
     queryKey: ["admin", "usage"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/usage");
+      const res = await fetch(withBasePath("/api/admin/usage"));
       if (!res.ok) throw new Error("Failed to fetch admin data");
       const json = await res.json();
       return json.data as AdminData;
@@ -55,7 +56,7 @@ function useActiveExperimentId() {
   const { data } = useQuery({
     queryKey: ["admin", "experiments"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/experiments");
+      const res = await fetch(withBasePath("/api/admin/experiments"));
       if (!res.ok) return null;
       const json = await res.json();
       return json.data as {

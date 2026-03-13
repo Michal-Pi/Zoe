@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { withBasePath } from "@/lib/base-path";
 import {
   Card,
   CardContent,
@@ -48,7 +49,7 @@ export function ExperimentResults({
     queryFn: async () => {
       if (!experimentId) return null;
       const res = await fetch(
-        `/api/admin/experiments/results?experiment_id=${experimentId}`
+        withBasePath(`/api/admin/experiments/results?experiment_id=${experimentId}`)
       );
       if (!res.ok) throw new Error("Failed to fetch results");
       const json = await res.json();

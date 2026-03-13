@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { withBasePath } from "@/lib/base-path";
 
 interface Experiment {
   id: string;
@@ -36,7 +37,7 @@ function useExperiments() {
   return useQuery({
     queryKey: ["admin", "experiments"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/experiments");
+      const res = await fetch(withBasePath("/api/admin/experiments"));
       if (!res.ok) throw new Error("Failed to fetch experiments");
       const json = await res.json();
       return json.data as ExperimentsData;
@@ -58,7 +59,7 @@ export function ExperimentControls() {
       id: string;
       body: Record<string, unknown>;
     }) => {
-      const res = await fetch(`/api/admin/experiments/${id}`, {
+      const res = await fetch(withBasePath(`/api/admin/experiments/${id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -352,7 +353,7 @@ function CreateExperimentForm({ onCreated }: { onCreated: () => void }) {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/admin/experiments", {
+      const res = await fetch(withBasePath("/api/admin/experiments"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
