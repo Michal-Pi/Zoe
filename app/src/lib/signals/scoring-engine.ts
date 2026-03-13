@@ -1,11 +1,10 @@
 import { generateObject } from "ai";
 import { models } from "@/lib/ai/providers";
 import { clusterResultSchema } from "@/lib/ai/schemas/scoring";
-import { activityExtractionSchema } from "@/lib/ai/schemas/scoring";
 import { buildClusterPrompt } from "@/lib/ai/prompts/cluster-signals";
-import { buildActivityExtractionPrompt } from "@/lib/ai/prompts/extract-activities";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { logLLMUsage } from "@/lib/monitoring/llm-costs";
+import { createActivitiesFromWorkObjects } from "@/lib/scoring/deterministic-activities";
 
 const MAX_EXTRACTION_ATTEMPTS = 3;
 
@@ -476,6 +475,7 @@ export async function runScoringEngine(userId: string): Promise<{
     return { clustered, activitiesCreated: 0, errors, errorDetails: errorDetails.slice(0, 10) };
   }
 
+  // Fetch signals for extraction — need full classification fields
   const allSignalIds = Array.from(
     new Set(extractionWorkObjects.flatMap((wo) => wo.signalIds))
   );
@@ -483,7 +483,7 @@ export async function runScoringEngine(userId: string): Promise<{
   const { data: extractionSignals } = await supabase
     .from("signals")
     .select(
-      "id, source, title, snippet, sender_name, urgency_score, requires_response, received_at"
+      "id, source, source_type, title, snippet, sender_name, sender_email, urgency_score, ownership_signal, requires_response, escalation_level, topic_cluster, received_at"
     )
     .in("id", allSignalIds);
 
@@ -491,228 +491,158 @@ export async function runScoringEngine(userId: string): Promise<{
     (extractionSignals ?? []).map((signal) => [signal.id, signal])
   );
 
-  // Build extraction input — include signal details for each work object
-  const woForExtraction = extractionWorkObjects.map((wo) => {
-    const signalDetails = wo.signalIds
+  // Build work object inputs with full signal data for deterministic scoring
+  const woInputs = extractionWorkObjects.map((wo) => {
+    const signals = wo.signalIds
       .map((signalId) => extractionSignalsById.get(signalId))
-      .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal))
-      .filter((s) => wo.signalIds.includes(s.id))
-      .map((s) => ({
-        source: s.source,
-        title: s.title,
-        snippet: s.snippet,
-        senderName: s.sender_name,
-        urgencyScore: s.urgency_score,
-        requiresResponse: s.requires_response,
-        receivedAt: s.received_at,
-      }));
+      .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal));
 
     return {
       id: wo.id,
       title: wo.title,
       description: wo.description,
-      signals: signalDetails,
+      sourceKey: wo.sourceKey,
+      signals,
     };
   });
 
-  const extractionPrompt = buildActivityExtractionPrompt(
-    woForExtraction,
-    priorityTitles,
-    new Date().toISOString()
+  // Create activities deterministically — no LLM call
+  const generatedActivities = createActivitiesFromWorkObjects(
+    woInputs,
+    priorityTitles
   );
 
   let activitiesCreated = 0;
 
-  try {
-    const { object, usage: extractionUsage } = await generateObject({
-      model: models.standard,
-      schema: activityExtractionSchema,
-      prompt: extractionPrompt,
-    });
-    if (extractionUsage) {
-      logLLMUsage({
-        model: "claude-sonnet-4-6-latest",
-        operation: "extract_activities",
-        inputTokens: extractionUsage.inputTokens ?? 0,
-        outputTokens: extractionUsage.outputTokens ?? 0,
-        userId,
-        metadata: { workObjectCount: woForExtraction.length },
+  // Deduplicate against existing activities
+  const dedupeCandidates = generatedActivities.map((activity) => {
+    const wo = extractionWorkObjects.find((candidate) => candidate.id === activity.work_object_id);
+    if (!wo) return null;
+    return buildActivityDedupeKey(wo, activity);
+  }).filter((value): value is string => Boolean(value));
+
+  const existingActiveActivitiesByDedupeKey = new Map<string, { id: string; status: string }>();
+
+  if (dedupeCandidates.length) {
+    const { data: existingActivities } = await supabase
+      .from("activities")
+      .select("id, dedupe_key, status")
+      .eq("user_id", userId)
+      .in("status", ["pending", "in_progress", "snoozed"])
+      .in("dedupe_key", Array.from(new Set(dedupeCandidates)));
+
+    for (const existing of existingActivities ?? []) {
+      if (!existing.dedupe_key) continue;
+      existingActiveActivitiesByDedupeKey.set(existing.dedupe_key, {
+        id: existing.id,
+        status: existing.status,
       });
     }
+  }
 
-    const existingActiveActivitiesByDedupeKey = new Map<string, { id: string; status: string }>();
-    const dedupeCandidates = object.activities
-      .map((activity) => {
-        const matchedWorkObject = woForExtraction.find(
-          (wo) =>
-            activity.batch_key === wo.id ||
-            wo.title.toLowerCase().includes(activity.title.toLowerCase().slice(0, 20)) ||
-            activity.title.toLowerCase().includes(wo.title.toLowerCase().slice(0, 20))
-        );
-
-        if (!matchedWorkObject) return null;
-
-        return buildActivityDedupeKey(
-          {
-            id: matchedWorkObject.id,
-            title: matchedWorkObject.title,
-            description: matchedWorkObject.description,
-            signalIds: [],
-            sourceKey:
-              extractionWorkObjects.find((candidate) => candidate.id === matchedWorkObject.id)
-                ?.sourceKey ?? null,
-          },
-          activity
-        );
-      })
-      .filter((value): value is string => Boolean(value));
-
-    if (dedupeCandidates.length) {
-      const { data: existingActivities } = await supabase
-        .from("activities")
-        .select("id, dedupe_key, status")
-        .eq("user_id", userId)
-        .in("status", ["pending", "in_progress", "snoozed"])
-        .in("dedupe_key", Array.from(new Set(dedupeCandidates)));
-
-      for (const activity of existingActivities ?? []) {
-        if (!activity.dedupe_key) continue;
-        existingActiveActivitiesByDedupeKey.set(activity.dedupe_key, {
-          id: activity.id,
-          status: activity.status,
-        });
-      }
+  // Insert or update activities
+  for (const activity of generatedActivities) {
+    const wo = extractionWorkObjects.find(
+      (candidate) => candidate.id === activity.work_object_id
+    );
+    if (!wo) {
+      errors++;
+      errorDetails.push(
+        `activity resolution failed for "${activity.title}": no work object matched`
+      );
+      continue;
     }
 
-    // Insert activities — match to correct work object by batch_key or title
-    for (const activity of object.activities) {
-      const matchedWO = woForExtraction.find(
-        (wo) =>
-          activity.batch_key === wo.id ||
-          wo.title.toLowerCase().includes(activity.title.toLowerCase().slice(0, 20)) ||
-          activity.title.toLowerCase().includes(wo.title.toLowerCase().slice(0, 20))
-      );
-      const resolvedWO =
-        extractionWorkObjects.find((candidate) => candidate.id === matchedWO?.id) ??
-        extractionWorkObjects[0];
+    const dedupeKey = buildActivityDedupeKey(wo, activity);
+    const activityPayload = {
+      work_object_id: activity.work_object_id,
+      title: activity.title,
+      description: activity.description,
+      time_estimate_minutes: activity.time_estimate_minutes,
+      score: activity.score,
+      score_rationale: activity.score_rationale,
+      scoring_factors: activity.scoring_factors,
+      horizon: activity.horizon,
+      trigger_description: activity.trigger_description,
+      deadline_at: activity.deadline_at,
+      batch_key: activity.batch_key,
+      batch_label: activity.batch_label,
+      dedupe_key: dedupeKey,
+      scored_at: new Date().toISOString(),
+    };
 
-      if (!resolvedWO) {
+    const existingActivity = existingActiveActivitiesByDedupeKey.get(dedupeKey);
+    if (existingActivity) {
+      const { error: updateErr } = await supabase
+        .from("activities")
+        .update(activityPayload)
+        .eq("id", existingActivity.id)
+        .eq("user_id", userId);
+
+      if (updateErr) {
         errors++;
         errorDetails.push(
-          `activity resolution failed for "${activity.title}": no work object matched`
+          `activity update failed for "${activity.title}": ${getErrorMessage(updateErr)}`
         );
-        continue;
       }
+      continue;
+    }
 
-      const dedupeKey = buildActivityDedupeKey(resolvedWO, activity);
-      const activityPayload = {
-        work_object_id: resolvedWO?.id ?? null,
-        title: activity.title,
-        description: activity.description,
-        time_estimate_minutes: clampRange(activity.time_estimate_minutes, 1, 480),
-        score: clampRange(activity.score, 0, 100),
-        score_rationale: activity.score_rationale,
-        scoring_factors: {
-          urgency: clampRange(activity.scoring_factors.urgency, 0, 100),
-          importance: clampRange(activity.scoring_factors.importance, 0, 100),
-          effort: clampRange(activity.scoring_factors.effort, 0, 100),
-          strategic_alignment: clampRange(
-            activity.scoring_factors.strategic_alignment,
-            0,
-            100
-          ),
-        },
-        horizon: activity.horizon,
-        trigger_description: activity.trigger_description,
-        deadline_at: activity.deadline_at,
-        batch_key: activity.batch_key,
-        batch_label: activity.batch_label,
-        dedupe_key: dedupeKey,
-        scored_at: new Date().toISOString(),
-      };
+    const { data: insertedActivity, error: insertErr } = await supabase
+      .from("activities")
+      .insert({
+        user_id: userId,
+        ...activityPayload,
+      })
+      .select("id")
+      .single();
 
-      const existingActivity = existingActiveActivitiesByDedupeKey.get(dedupeKey);
-      if (existingActivity) {
-        const { error: updateErr } = await supabase
-          .from("activities")
-          .update(activityPayload)
-          .eq("id", existingActivity.id)
-          .eq("user_id", userId);
-
-        if (updateErr) {
-          errors++;
-          errorDetails.push(
-            `activity update failed for "${activity.title}": ${getErrorMessage(updateErr)}`
-          );
-        }
-        continue;
-      }
-
-      const { data: insertedActivity, error: insertErr } = await supabase
+    if (insertErr && isUniqueViolation(insertErr)) {
+      const { data: concurrentActivity } = await supabase
         .from("activities")
-        .insert({
-          user_id: userId,
-          ...activityPayload,
-        })
         .select("id")
+        .eq("user_id", userId)
+        .eq("dedupe_key", dedupeKey)
+        .in("status", ["pending", "in_progress", "snoozed"])
+        .limit(1)
         .single();
 
-      if (insertErr && isUniqueViolation(insertErr)) {
-        const { data: concurrentActivity } = await supabase
+      if (concurrentActivity) {
+        const { error: recoveryUpdateErr } = await supabase
           .from("activities")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("dedupe_key", dedupeKey)
-          .in("status", ["pending", "in_progress", "snoozed"])
-          .limit(1)
-          .single();
+          .update(activityPayload)
+          .eq("id", concurrentActivity.id)
+          .eq("user_id", userId);
 
-        if (concurrentActivity) {
-          const { error: recoveryUpdateErr } = await supabase
-            .from("activities")
-            .update(activityPayload)
-            .eq("id", concurrentActivity.id)
-            .eq("user_id", userId);
-
-          if (recoveryUpdateErr) {
-            errors++;
-            errorDetails.push(
-              `activity recovery update failed for "${activity.title}": ${getErrorMessage(
-                recoveryUpdateErr
-              )}`
-            );
-          } else {
-            existingActiveActivitiesByDedupeKey.set(dedupeKey, {
-              id: concurrentActivity.id,
-              status: "pending",
-            });
-          }
-          continue;
+        if (recoveryUpdateErr) {
+          errors++;
+          errorDetails.push(
+            `activity recovery update failed for "${activity.title}": ${getErrorMessage(
+              recoveryUpdateErr
+            )}`
+          );
+        } else {
+          existingActiveActivitiesByDedupeKey.set(dedupeKey, {
+            id: concurrentActivity.id,
+            status: "pending",
+          });
         }
-      }
-
-      if (insertErr || !insertedActivity) {
-        errors++;
-        errorDetails.push(
-          `activity insert failed for "${activity.title}": ${getErrorMessage(insertErr)}`
-        );
-      } else {
-        activitiesCreated++;
-        existingActiveActivitiesByDedupeKey.set(dedupeKey, {
-          id: insertedActivity.id,
-          status: "pending",
-        });
+        continue;
       }
     }
-  } catch (err) {
-    const message = `activity extraction failed: ${getErrorMessage(err)}`;
-    console.error("Activity extraction error:", {
-      userId,
-      workObjectIds: woForExtraction.map((workObject) => workObject.id),
-      error: getErrorMessage(err),
-    });
-    errorDetails.push(message);
-    errors++;
+
+    if (insertErr || !insertedActivity) {
+      errors++;
+      errorDetails.push(
+        `activity insert failed for "${activity.title}": ${getErrorMessage(insertErr)}`
+      );
+    } else {
+      activitiesCreated++;
+      existingActiveActivitiesByDedupeKey.set(dedupeKey, {
+        id: insertedActivity.id,
+        status: "pending",
+      });
+    }
   }
 
   // Increment extraction_attempts for all candidates and mark failures at cap

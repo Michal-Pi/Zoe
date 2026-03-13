@@ -22,6 +22,9 @@ export const clusterResultSchema = z.object({
 
 export type ClusterResult = z.infer<typeof clusterResultSchema>;
 
+// NOTE: This schema is currently unused. Activity extraction was replaced by
+// deterministic scoring in lib/scoring/deterministic-activities.ts (Phase 1).
+// Kept for potential reuse in Phase 6 (full-context review route).
 export const activityExtractionSchema = z.object({
   activities: z.array(
     z.object({

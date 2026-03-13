@@ -1,3 +1,7 @@
+// NOTE: This prompt is currently unused. Activity extraction was replaced by
+// deterministic scoring in lib/scoring/deterministic-activities.ts (Phase 1).
+// Kept for potential reuse in Phase 6 (full-context review route).
+
 interface WorkObjectForExtraction {
   id: string;
   title: string;
