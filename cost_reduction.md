@@ -50,12 +50,13 @@ Current admin: `michal.pilawski@gmail.com`
 - Budget mode toggle (soft cap vs hard cap)
 - Route C usage monitor and alerts
 
-## Phase 0: Guardrails And Baseline (DONE)
+## Implemented Optimizations (Phases 0–2)
 
-### Goal
-Stabilize measurement before changing behavior.
+### Phase 0: Guardrails And Baseline (DONE)
 
-### Deliverables
+**Goal:** Stabilize measurement before changing behavior.
+
+**Deliverables:**
 - [x] persisted AI usage events (`llm_usage` table + instrumented all LLM calls)
 - [x] admin role and System Admin dashboard (`is_admin` flag, `/admin` page)
 - [x] bug fix: infinite extraction retry loop (capped at 3 attempts)
@@ -64,6 +65,70 @@ Stabilize measurement before changing behavior.
 - [x] prompt trimming (removed redundant fields, truncated snippets)
 - [ ] experiment config model (deferred to Phase 3)
 - [ ] route result storage (deferred to Phase 3)
+
+### Phase 1: Deterministic Activity Extraction (DONE)
+
+**Goal:** Eliminate Sonnet from background scoring pipeline.
+
+**Deliverables:**
+- [x] `lib/scoring/deterministic-activities.ts` — formula-based scoring replaces Sonnet `generateObject`
+- [x] Scoring formula: `urgency(30%) + importance(30%) + effort(20%) + strategic_alignment(20%)`
+- [x] Deterministic title, trigger, time estimate, horizon, batch key generation
+- [x] Zero Sonnet tokens in cron pipeline
+
+### Phase 2a: Heuristic Signal Triage (DONE)
+
+**Goal:** Skip Haiku for easy-to-classify signals.
+
+**Deliverables:**
+- [x] `lib/scoring/heuristic-classifier.ts` — deterministic classification with confidence scores
+- [x] Integrated into `classifier.ts` — high-confidence signals (≥0.85) skip Haiku entirely
+- [x] Covers: noreply/newsletter/automated senders, promotions/social labels, marketing text, escalation language
+- [x] ~50% of signals bypass Haiku
+
+### Phase 2b: Deterministic Clustering (DONE)
+
+**Goal:** Eliminate Haiku clustering call.
+
+**Deliverables:**
+- [x] `lib/scoring/deterministic-clustering.ts` — groups signals by pre-assigned `topic_cluster`
+- [x] Thread-based signals already clustered by `thread_id` (unchanged)
+- [x] Non-thread signals clustered by `topic_cluster` with title matching to existing work objects
+- [x] Zero Haiku tokens for clustering
+
+### Phase 2c: Deterministic Meeting Classification (DONE)
+
+**Goal:** Eliminate Haiku meeting classification call.
+
+**Deliverables:**
+- [x] `lib/scoring/deterministic-meeting-classifier.ts` — heuristic classification by title/description patterns
+- [x] Replaces Haiku `generateObject` call in `calendar/meeting-classifier.ts`
+- [x] Classifies decision_density, ownership_load, efficiency_risks, prep_time_needed_minutes
+- [x] Zero Haiku tokens for meeting classification
+
+### Phase 2d: Prompt & Tool Output Truncation (DONE)
+
+**Goal:** Reduce Sonnet token usage for user-initiated calls.
+
+**Deliverables:**
+- [x] Draft reply prompt: email body truncated to 1500 chars, thread context to 2000 chars
+- [x] Follow-up prompt: signal snippets truncated to 150 chars
+- [x] Chat tool `get_email_thread_context`: body truncated to 1500 chars in tool output
+- [x] Chat tool `search_signals`: snippets truncated to 200 chars in tool output
+- [x] Chat history: sliding window of 20 messages
+
+### Current State
+
+**Background pipeline (cron): ZERO LLM tokens**
+- Signal classification: heuristic for high-confidence, Haiku only for ambiguous human emails
+- Signal clustering: deterministic by topic_cluster
+- Activity extraction: deterministic formula
+- Meeting classification: deterministic heuristics
+
+**User-initiated calls (Sonnet): truncated prompts**
+- Chat: 20-message window, truncated tool outputs
+- Draft generation: 1500-char body, 2000-char thread context
+- Follow-up generation: 150-char snippets
 
 ### Work
 1. ~~Add persistent usage table if not already present.~~ DONE (migration 00013)

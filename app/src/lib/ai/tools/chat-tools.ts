@@ -83,7 +83,12 @@ export function getChatTools(userId: string) {
 
         const { data, error } = await q;
         if (error) return { error: error.message };
-        return { signals: data ?? [], count: data?.length ?? 0 };
+        // Truncate snippets to limit tokens fed back into Sonnet
+        const trimmed = (data ?? []).map((s) => ({
+          ...s,
+          snippet: s.snippet ? s.snippet.slice(0, 200) : s.snippet,
+        }));
+        return { signals: trimmed, count: trimmed.length };
       },
     },
 
@@ -245,6 +250,20 @@ export function getChatTools(userId: string) {
             ? `I reviewed "${signal.title}" and found ${relatedSignals.length} recent emails in the same thread.`
             : `I reviewed "${signal.title}" and this looks like a single-message thread.`;
 
+        // Truncate body to limit tokens fed back into Sonnet context
+        const MAX_TOOL_BODY_CHARS = 1500;
+        const truncatedBody = body
+          ? body.length > MAX_TOOL_BODY_CHARS
+            ? body.slice(0, MAX_TOOL_BODY_CHARS) + "\n[... truncated]"
+            : body
+          : null;
+
+        // Truncate related signal snippets
+        const trimmedRelated = relatedSignals.map((s: Record<string, unknown>) => ({
+          ...s,
+          snippet: typeof s.snippet === "string" ? s.snippet.slice(0, 200) : s.snippet,
+        }));
+
         return {
           signal: {
             id: signal.id,
@@ -254,9 +273,9 @@ export function getChatTools(userId: string) {
             urgency_score: signal.urgency_score,
             received_at: signal.received_at,
             snippet: signal.snippet,
-            body,
+            body: truncatedBody,
           },
-          relatedSignals,
+          relatedSignals: trimmedRelated,
           message: summary,
         };
       },
