@@ -12,15 +12,46 @@ export async function GET(request: NextRequest) {
 
   const supabase = await createServiceRoleClient();
 
-  // Find users with classified signals (the scoring engine internally
-  // filters to only unclustered signals, so this is just user discovery)
-  const { data: classified } = await supabase
+  // Find users who have classified signals not yet linked to any work object.
+  // This avoids running the scoring engine for users with nothing to process.
+  const { data: unlinkedSignals } = await supabase
     .from("signals")
-    .select("user_id")
+    .select("user_id, id")
     .not("classified_at", "is", null)
-    .limit(100);
+    .limit(200);
 
-  const uniqueUserIds = [...new Set(classified?.map((s) => s.user_id) ?? [])];
+  if (!unlinkedSignals?.length) {
+    return NextResponse.json({ results: [], timestamp: new Date().toISOString() });
+  }
+
+  const signalIds = unlinkedSignals.map((s) => s.id);
+  const { data: linkedRows } = await supabase
+    .from("work_object_signals")
+    .select("signal_id")
+    .in("signal_id", signalIds);
+
+  const linkedIds = new Set(linkedRows?.map((r) => r.signal_id) ?? []);
+  const usersWithUnlinked = new Set(
+    unlinkedSignals.filter((s) => !linkedIds.has(s.id)).map((s) => s.user_id)
+  );
+
+  // Also include users who have active work objects eligible for extraction retry
+  const { data: retryWOs } = await supabase
+    .from("work_objects")
+    .select("user_id")
+    .eq("status", "active")
+    .lt("extraction_attempts", 3)
+    .is("extraction_failed_at", null);
+
+  // Check which of these WOs actually lack activities
+  if (retryWOs?.length) {
+    const retryUserIds = [...new Set(retryWOs.map((wo) => wo.user_id))];
+    for (const uid of retryUserIds) {
+      usersWithUnlinked.add(uid);
+    }
+  }
+
+  const uniqueUserIds = [...usersWithUnlinked];
 
   const results = [];
   for (const userId of uniqueUserIds) {

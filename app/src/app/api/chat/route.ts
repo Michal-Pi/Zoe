@@ -15,6 +15,7 @@ import {
   createServiceRoleClient,
   createServerSupabaseClient,
 } from "@/lib/supabase/server";
+import { logLLMUsage } from "@/lib/monitoring/llm-costs";
 
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
@@ -255,7 +256,15 @@ Guidelines:
   let finalAssistantText = "";
   let fallbackAssistantText = "";
 
-  const modelMessages = await convertToModelMessages(messages);
+  // Truncate conversation history to limit token usage.
+  // Keep the last MAX_CHAT_HISTORY_MESSAGES to avoid unbounded growth.
+  const MAX_CHAT_HISTORY_MESSAGES = 20;
+  const truncatedMessages =
+    messages.length > MAX_CHAT_HISTORY_MESSAGES
+      ? messages.slice(-MAX_CHAT_HISTORY_MESSAGES)
+      : messages;
+
+  const modelMessages = await convertToModelMessages(truncatedMessages);
 
   const result = streamText({
     model: models.standard,
@@ -304,7 +313,7 @@ Guidelines:
         })
       );
     },
-    onFinish: ({ text, finishReason, steps }) => {
+    onFinish: ({ text, finishReason, steps, usage: chatUsage }) => {
       finalAssistantText = text ?? "";
       if (!finalAssistantText) {
         for (const step of [...steps].reverse()) {
@@ -314,6 +323,16 @@ Guidelines:
             break;
           }
         }
+      }
+      if (chatUsage) {
+        logLLMUsage({
+          model: "claude-sonnet-4-6-latest",
+          operation: "chat",
+          inputTokens: chatUsage.inputTokens ?? 0,
+          outputTokens: chatUsage.outputTokens ?? 0,
+          userId: user.id,
+          metadata: { steps: steps.length, messageCount: truncatedMessages.length },
+        });
       }
       console.log(
         `[chat:${requestId}] stream finish`,
@@ -578,6 +597,16 @@ async function createDraftForTopEmail({
     schema: draftReplySchema,
     prompt,
   });
+
+  if (usage) {
+    logLLMUsage({
+      model: "claude-sonnet-4-6-latest",
+      operation: "draft_reply",
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+      userId,
+    });
+  }
 
   const { data: draft, error: insertError } = await serviceClient
     .from("draft_replies")

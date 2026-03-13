@@ -4,14 +4,11 @@ interface WorkObjectForExtraction {
   description: string | null;
   signals: {
     source: string;
-    sourceType: string;
     title: string | null;
     snippet: string | null;
     senderName: string | null;
     urgencyScore: number | null;
-    ownershipSignal: string | null;
     requiresResponse: boolean | null;
-    escalationLevel: string | null;
     receivedAt: string;
   }[];
 }
@@ -31,7 +28,7 @@ export function buildActivityExtractionPrompt(
       const signalsList = wo.signals
         .map(
           (s) =>
-            `  - [${s.source}/${s.sourceType}] ${s.title ?? "(no title)"} from ${s.senderName ?? "Unknown"} (urgency: ${s.urgencyScore ?? "?"}, ownership: ${s.ownershipSignal ?? "?"}, needs reply: ${s.requiresResponse ?? "?"}, escalation: ${s.escalationLevel ?? "none"})`
+            `  - [${s.source}] ${s.title ?? "(no title)"} from ${s.senderName ?? "Unknown"} (urgency: ${s.urgencyScore ?? "?"}/100, reply needed: ${s.requiresResponse ?? "?"}) ${(s.snippet ?? "").slice(0, 120)}`
         )
         .join("\n");
 

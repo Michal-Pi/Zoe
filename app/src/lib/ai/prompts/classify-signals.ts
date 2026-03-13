@@ -22,14 +22,11 @@ export function buildClassificationPrompt(
   const signalsSection = signals
     .map(
       (s) =>
-        `[${s.id}] Source: ${s.source} (${s.sourceType})
-Title: ${s.title ?? "(none)"}
-From: ${s.senderName ?? "Unknown"} <${s.senderEmail ?? "unknown"}>
-Received: ${s.receivedAt}
-Labels: ${s.labels?.join(", ") ?? "none"}
-Snippet: ${s.snippet ?? "(empty)"}`
+        `[${s.id}] ${s.source}/${s.sourceType} | ${s.senderName ?? "Unknown"} <${s.senderEmail ?? ""}> | ${s.receivedAt}${s.labels?.length ? ` | Labels: ${s.labels.join(", ")}` : ""}
+${s.title ?? "(no title)"}
+${(s.snippet ?? "").slice(0, 200)}`
     )
-    .join("\n\n---\n\n");
+    .join("\n\n");
 
   return `You are Zoe, a personal assistant that classifies incoming signals (emails, Slack messages, calendar events) for a busy professional.
 

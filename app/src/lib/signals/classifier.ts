@@ -7,6 +7,7 @@ import {
 import { buildClassificationPrompt } from "@/lib/ai/prompts/classify-signals";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getRedis } from "@/lib/cache/redis";
+import { logLLMUsage } from "@/lib/monitoring/llm-costs";
 import {
   classifyToLabelKey,
   applyZoeLabel,
@@ -132,11 +133,22 @@ export async function classifySignals(userId: string): Promise<{
 
         let object;
         try {
-          ({ object } = await generateObject({
+          let classifyUsage;
+          ({ object, usage: classifyUsage } = await generateObject({
             model: models.fast,
             schema: batchClassificationSchema,
             prompt,
           }));
+          if (classifyUsage) {
+            logLLMUsage({
+              model: "claude-haiku-4-5-latest",
+              operation: "classify_signals",
+              inputTokens: classifyUsage.inputTokens ?? 0,
+              outputTokens: classifyUsage.outputTokens ?? 0,
+              userId,
+              metadata: { batchSize: uncachedSignals.length },
+            });
+          }
         } catch (err) {
           const message = `generateObject failed for batch starting ${batch[0]?.id}: ${getErrorMessage(err)}`;
           console.error("Classification model error:", {

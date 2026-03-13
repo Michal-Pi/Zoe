@@ -5,11 +5,6 @@ interface SignalForClustering {
   title: string | null;
   snippet: string | null;
   senderName: string | null;
-  senderEmail: string | null;
-  topicCluster: string | null;
-  urgencyScore: number | null;
-  ownershipSignal: string | null;
-  requiresResponse: boolean | null;
   receivedAt: string;
 }
 
@@ -25,15 +20,11 @@ export function buildClusterPrompt(
   const signalsSection = signals
     .map(
       (s) =>
-        `[${s.id}] Source: ${s.source} (${s.sourceType})
-Title: ${s.title ?? "(none)"}
-From: ${s.senderName ?? "Unknown"} <${s.senderEmail ?? "unknown"}>
-Topic: ${s.topicCluster ?? "unclassified"}
-Urgency: ${s.urgencyScore ?? "?"}/100 | Ownership: ${s.ownershipSignal ?? "?"} | Needs reply: ${s.requiresResponse ?? "?"}
-Received: ${s.receivedAt}
-Snippet: ${s.snippet ?? "(empty)"}`
+        `[${s.id}] ${s.source}/${s.sourceType} | ${s.senderName ?? "Unknown"} | ${s.receivedAt}
+${s.title ?? "(no title)"}
+${(s.snippet ?? "").slice(0, 120)}`
     )
-    .join("\n\n---\n\n");
+    .join("\n\n");
 
   return `You are Zoe, a personal assistant that organizes incoming signals into coherent work objects (threads of related work).
 

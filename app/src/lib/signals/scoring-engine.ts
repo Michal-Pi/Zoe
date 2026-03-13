@@ -5,6 +5,9 @@ import { activityExtractionSchema } from "@/lib/ai/schemas/scoring";
 import { buildClusterPrompt } from "@/lib/ai/prompts/cluster-signals";
 import { buildActivityExtractionPrompt } from "@/lib/ai/prompts/extract-activities";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { logLLMUsage } from "@/lib/monitoring/llm-costs";
+
+const MAX_EXTRACTION_ATTEMPTS = 3;
 
 type ScoringSignal = {
   id: string;
@@ -157,7 +160,7 @@ export async function runScoringEngine(userId: string): Promise<{
   // 2. Fetch existing active work objects for this user
   const { data: existingWOs } = await supabase
     .from("work_objects")
-    .select("id, title, description, source_key, updated_at")
+    .select("id, title, description, source_key, updated_at, extraction_attempts")
     .eq("user_id", userId)
     .eq("status", "active")
     .order("updated_at", { ascending: false })
@@ -227,6 +230,8 @@ export async function runScoringEngine(userId: string): Promise<{
           description,
           latest_signal_at: latestSignalAt,
           updated_at: new Date().toISOString(),
+          extraction_attempts: 0,
+          extraction_failed_at: null,
         })
         .eq("id", workObjectId);
     }
@@ -283,11 +288,6 @@ export async function runScoringEngine(userId: string): Promise<{
         title: s.title,
         snippet: s.snippet,
         senderName: s.sender_name,
-        senderEmail: s.sender_email,
-        topicCluster: s.topic_cluster,
-        urgencyScore: s.urgency_score,
-        ownershipSignal: s.ownership_signal,
-        requiresResponse: s.requires_response,
         receivedAt: s.received_at,
       })),
       existingNonThreadWOs.map((workObject) => ({
@@ -298,12 +298,22 @@ export async function runScoringEngine(userId: string): Promise<{
 
     let clusterResult;
     try {
-      const { object } = await generateObject({
+      const { object, usage: clusterUsage } = await generateObject({
         model: models.fast,
         schema: clusterResultSchema,
         prompt: clusterPrompt,
       });
       clusterResult = object;
+      if (clusterUsage) {
+        logLLMUsage({
+          model: "claude-haiku-4-5-latest",
+          operation: "cluster_signals",
+          inputTokens: clusterUsage.inputTokens ?? 0,
+          outputTokens: clusterUsage.outputTokens ?? 0,
+          userId,
+          metadata: { signalCount: nonThreadSignals.length },
+        });
+      }
     } catch (err) {
       const message = `clustering failed: ${getErrorMessage(err)}`;
       console.error("Clustering error:", {
@@ -338,6 +348,8 @@ export async function runScoringEngine(userId: string): Promise<{
           .update({
             signal_count: (existingCount ?? 0) + cluster.signal_ids.length,
             latest_signal_at: new Date().toISOString(),
+            extraction_attempts: 0,
+            extraction_failed_at: null,
           })
           .eq("id", existingMatch.id);
       } else {
@@ -406,7 +418,11 @@ export async function runScoringEngine(userId: string): Promise<{
   );
 
   const retryWorkObjects =
-    existingWOs?.filter((wo) => !workObjectIdsWithActivities.has(wo.id)) ?? [];
+    existingWOs?.filter(
+      (wo) =>
+        !workObjectIdsWithActivities.has(wo.id) &&
+        (wo.extraction_attempts ?? 0) < MAX_EXTRACTION_ATTEMPTS
+    ) ?? [];
 
   const extractionCandidates = new Map<
     string,
@@ -467,7 +483,7 @@ export async function runScoringEngine(userId: string): Promise<{
   const { data: extractionSignals } = await supabase
     .from("signals")
     .select(
-      "id, source, source_type, title, snippet, sender_name, urgency_score, ownership_signal, requires_response, escalation_level, received_at"
+      "id, source, title, snippet, sender_name, urgency_score, requires_response, received_at"
     )
     .in("id", allSignalIds);
 
@@ -483,14 +499,11 @@ export async function runScoringEngine(userId: string): Promise<{
       .filter((s) => wo.signalIds.includes(s.id))
       .map((s) => ({
         source: s.source,
-        sourceType: s.source_type,
         title: s.title,
         snippet: s.snippet,
         senderName: s.sender_name,
         urgencyScore: s.urgency_score,
-        ownershipSignal: s.ownership_signal,
         requiresResponse: s.requires_response,
-        escalationLevel: s.escalation_level,
         receivedAt: s.received_at,
       }));
 
@@ -511,11 +524,21 @@ export async function runScoringEngine(userId: string): Promise<{
   let activitiesCreated = 0;
 
   try {
-    const { object } = await generateObject({
+    const { object, usage: extractionUsage } = await generateObject({
       model: models.standard,
       schema: activityExtractionSchema,
       prompt: extractionPrompt,
     });
+    if (extractionUsage) {
+      logLLMUsage({
+        model: "claude-sonnet-4-6-latest",
+        operation: "extract_activities",
+        inputTokens: extractionUsage.inputTokens ?? 0,
+        outputTokens: extractionUsage.outputTokens ?? 0,
+        userId,
+        metadata: { workObjectCount: woForExtraction.length },
+      });
+    }
 
     const existingActiveActivitiesByDedupeKey = new Map<string, { id: string; status: string }>();
     const dedupeCandidates = object.activities
@@ -690,6 +713,33 @@ export async function runScoringEngine(userId: string): Promise<{
     });
     errorDetails.push(message);
     errors++;
+  }
+
+  // Increment extraction_attempts for all candidates and mark failures at cap
+  const allCandidateIds = Array.from(extractionCandidates.keys());
+  if (allCandidateIds.length) {
+    for (const woId of allCandidateIds) {
+      const currentAttempts =
+        (existingWOs?.find((wo) => wo.id === woId)?.extraction_attempts ?? 0) + 1;
+
+      const updatePayload: Record<string, unknown> = {
+        extraction_attempts: currentAttempts,
+      };
+
+      if (currentAttempts >= MAX_EXTRACTION_ATTEMPTS) {
+        updatePayload.extraction_failed_at = new Date().toISOString();
+        console.warn("Work object hit extraction retry cap:", {
+          userId,
+          workObjectId: woId,
+          attempts: currentAttempts,
+        });
+      }
+
+      await supabase
+        .from("work_objects")
+        .update(updatePayload)
+        .eq("id", woId);
+    }
   }
 
   return { clustered, activitiesCreated, errors, errorDetails: errorDetails.slice(0, 10) };

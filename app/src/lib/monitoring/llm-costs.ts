@@ -1,11 +1,14 @@
 // LLM cost tracking — logs token usage for monitoring and budgeting
 
+import { createServiceRoleClient } from "@/lib/supabase/server";
+
 interface LLMUsage {
   model: string;
   operation: string;
   inputTokens: number;
   outputTokens: number;
   userId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 // Approximate costs per 1M tokens (as of 2025)
@@ -41,4 +44,24 @@ export function logLLMUsage(usage: LLMUsage) {
       timestamp: new Date().toISOString(),
     })
   );
+
+  // Persist to database (fire-and-forget, never block the caller)
+  if (usage.userId) {
+    persistUsage(usage, cost).catch((err) => {
+      console.error("Failed to persist LLM usage:", err instanceof Error ? err.message : err);
+    });
+  }
+}
+
+async function persistUsage(usage: LLMUsage, cost: number): Promise<void> {
+  const supabase = await createServiceRoleClient();
+  await supabase.from("llm_usage").insert({
+    user_id: usage.userId,
+    operation: usage.operation,
+    model: usage.model,
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    estimated_cost_usd: cost,
+    metadata: usage.metadata ?? {},
+  });
 }
