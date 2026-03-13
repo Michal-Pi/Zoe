@@ -1,4 +1,5 @@
 import {
+  convertToModelMessages,
   generateObject,
   createUIMessageStream,
   createUIMessageStreamResponse,
@@ -254,10 +255,12 @@ Guidelines:
   let finalAssistantText = "";
   let fallbackAssistantText = "";
 
+  const modelMessages = await convertToModelMessages(messages);
+
   const result = streamText({
     model: models.standard,
     system: systemPrompt,
-    messages,
+    messages: modelMessages,
     tools: tracedTools,
     stopWhen: stepCountIs(5),
     experimental_onStepStart: ({ stepNumber }) => {
