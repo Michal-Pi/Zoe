@@ -63,9 +63,47 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Admin route protection — check is_admin flag (cached in cookie)
+  const isApiRoute = pathname.startsWith("/api/");
+  if (user && pathname.startsWith("/admin")) {
+    const adminCookie = request.cookies.get("is_admin")?.value;
+    if (adminCookie === "true") {
+      // Cached — allow through
+    } else if (adminCookie === "false") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/dashboard";
+      return NextResponse.redirect(url);
+    } else {
+      // No cookie — check DB
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("is_admin")
+        .eq("id", user.id)
+        .single();
+
+      if (profile?.is_admin) {
+        supabaseResponse.cookies.set("is_admin", "true", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          maxAge: 60 * 60 * 24, // 1 day
+        });
+      } else {
+        supabaseResponse.cookies.set("is_admin", "false", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          maxAge: 60 * 60 * 24,
+        });
+        const url = request.nextUrl.clone();
+        url.pathname = "/dashboard";
+        return NextResponse.redirect(url);
+      }
+    }
+  }
+
   // Check onboarding status for authenticated users (not on onboarding or API routes)
   // Use a cookie cache to avoid DB query on every request
-  const isApiRoute = pathname.startsWith("/api/");
   if (
     user &&
     !isApiRoute &&

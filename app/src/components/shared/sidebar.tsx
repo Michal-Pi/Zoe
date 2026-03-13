@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { createClient } from "@/lib/supabase/client";
+import { useIsAdmin } from "@/hooks/use-admin";
 
 const navItems = [
   {
@@ -41,6 +42,7 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const isAdmin = useIsAdmin();
 
   const handleLogout = async () => {
     const supabase = createClient();
@@ -100,6 +102,33 @@ export function Sidebar() {
 
       {/* Bottom section */}
       <div className="border-t border-border p-2 space-y-1">
+        {isAdmin && (
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <Link
+                href="/admin"
+                aria-current={pathname === "/admin" || pathname?.startsWith("/admin/") ? "page" : undefined}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+                  pathname === "/admin" || pathname?.startsWith("/admin/")
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )}
+              >
+                <AdminIcon className={cn(
+                  "h-5 w-5 shrink-0",
+                  pathname === "/admin" || pathname?.startsWith("/admin/")
+                    ? "text-primary"
+                    : "text-muted-foreground"
+                )} />
+                <span className="hidden lg:block">System Admin</span>
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="lg:hidden">
+              System Admin
+            </TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip delayDuration={0}>
           <TooltipTrigger asChild>
             <Link
@@ -194,6 +223,20 @@ function LogoutIcon({ className }: { className?: string }) {
       <path d="M7 17H4C3.45 17 3 16.55 3 16V4C3 3.45 3.45 3 4 3H7" />
       <path d="M14 14L18 10L14 6" />
       <path d="M18 10H7" />
+    </svg>
+  );
+}
+
+function AdminIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="14" height="14" rx="2" />
+      <path d="M7 7H13" />
+      <path d="M7 10H13" />
+      <path d="M7 13H10" />
+      <circle cx="14" cy="14" r="4" fill="var(--background)" stroke="currentColor" />
+      <path d="M14 12.5V14.5" />
+      <path d="M14 14.5L15 15.5" />
     </svg>
   );
 }
