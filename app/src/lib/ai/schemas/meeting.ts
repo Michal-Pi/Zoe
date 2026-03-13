@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// NOTE: This schema is currently unused. Meeting classification was replaced by
+// deterministic heuristics in lib/scoring/deterministic-meeting-classifier.ts.
+// Kept for potential reuse in evaluation/comparison.
 export const meetingClassificationSchema = z.object({
   classifications: z.array(
     z.object({

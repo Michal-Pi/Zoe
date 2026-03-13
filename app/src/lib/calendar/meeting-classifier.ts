@@ -1,8 +1,6 @@
-import { generateObject } from "ai";
-import { models } from "@/lib/ai/providers";
-import { meetingClassificationSchema } from "@/lib/ai/schemas/meeting";
-import { buildMeetingClassificationPrompt } from "@/lib/ai/prompts/classify-meetings";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { logLLMUsage } from "@/lib/monitoring/llm-costs";
+import { classifyMeetingsDeterministically } from "@/lib/scoring/deterministic-meeting-classifier";
 
 function clampPrepMinutes(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -42,112 +40,101 @@ export async function classifyMeetings(userId: string): Promise<{
 
   if (error || !events?.length) return { classified: 0, errors: 0 };
 
-  // Get user email for context
-  const { data: emailProfile } = await supabase
-    .from("profiles")
-    .select("email")
-    .eq("id", userId)
-    .single();
+  // Deterministic classification — no LLM call
+  const classifications = classifyMeetingsDeterministically(
+    events.map((e) => ({
+      id: e.id,
+      title: e.title,
+      description: e.description,
+      start_at: e.start_at,
+      end_at: e.end_at,
+      is_organizer: e.is_organizer,
+      attendee_count: e.attendee_count,
+      is_recurring: e.is_recurring,
+      location: e.location,
+    }))
+  );
 
-  const userEmail = emailProfile?.email ?? "user";
+  logLLMUsage({
+    model: "heuristic",
+    operation: "classify_meetings",
+    inputTokens: 0,
+    outputTokens: 0,
+    userId,
+    metadata: { eventCount: events.length, skippedLLM: true },
+  });
 
-  try {
-    const prompt = buildMeetingClassificationPrompt(
-      events.map((e) => ({
-        id: e.id,
-        title: e.title,
-        description: e.description,
-        startAt: e.start_at,
-        endAt: e.end_at,
-        isOrganizer: e.is_organizer,
-        attendeeCount: e.attendee_count,
-        isRecurring: e.is_recurring,
-        location: e.location,
-      })),
-      userEmail
-    );
+  let classified = 0;
+  let errors = 0;
 
-    const { object } = await generateObject({
-      model: models.fast,
-      schema: meetingClassificationSchema,
-      prompt,
-    });
+  // Check for back-to-back meetings
+  const sortedEvents = [...events].sort(
+    (a, b) =>
+      new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+  );
 
-    let classified = 0;
-    let errors = 0;
-
-    // Check for back-to-back meetings
-    const sortedEvents = [...events].sort(
-      (a, b) =>
-        new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
-    );
-
-    const backToBackIds = new Set<string>();
-    for (let i = 1; i < sortedEvents.length; i++) {
-      const prevEnd = new Date(sortedEvents[i - 1].end_at).getTime();
-      const currStart = new Date(sortedEvents[i].start_at).getTime();
-      if (currStart - prevEnd < 5 * 60 * 1000) {
-        backToBackIds.add(sortedEvents[i - 1].id);
-        backToBackIds.add(sortedEvents[i].id);
-      }
+  const backToBackIds = new Set<string>();
+  for (let i = 1; i < sortedEvents.length; i++) {
+    const prevEnd = new Date(sortedEvents[i - 1].end_at).getTime();
+    const currStart = new Date(sortedEvents[i].start_at).getTime();
+    if (currStart - prevEnd < 5 * 60 * 1000) {
+      backToBackIds.add(sortedEvents[i - 1].id);
+      backToBackIds.add(sortedEvents[i].id);
     }
-
-    for (const classification of object.classifications) {
-      const prepMinutes = clampPrepMinutes(
-        classification.prep_time_needed_minutes
-      );
-      const risks = [...classification.efficiency_risks];
-      if (
-        backToBackIds.has(classification.event_id) &&
-        !risks.includes("back_to_back")
-      ) {
-        risks.push("back_to_back");
-      }
-
-      // Check if there's a prep block before high-density meetings
-      let hasPrepBlock = false;
-      if (prepMinutes > 0) {
-        const event = events.find((e) => e.id === classification.event_id);
-        if (event) {
-          const eventStart = new Date(event.start_at);
-          const prepWindow = new Date(
-            eventStart.getTime() -
-              prepMinutes * 60 * 1000
-          );
-
-          const { count } = await supabase
-            .from("calendar_events")
-            .select("*", { count: "exact", head: true })
-            .eq("user_id", userId)
-            .gte("start_at", prepWindow.toISOString())
-            .lt("end_at", eventStart.toISOString());
-
-          hasPrepBlock = (count ?? 0) === 0; // No conflicts = prep block exists
-        }
-      }
-
-      const { error: updateError } = await supabase
-        .from("calendar_events")
-        .update({
-          decision_density: classification.decision_density,
-          ownership_load: classification.ownership_load,
-          efficiency_risks: risks,
-          prep_time_needed_minutes: prepMinutes,
-          has_prep_block: hasPrepBlock,
-        })
-        .eq("id", classification.event_id)
-        .eq("user_id", userId);
-
-      if (updateError) {
-        errors++;
-      } else {
-        classified++;
-      }
-    }
-
-    return { classified, errors };
-  } catch (err) {
-    console.error("Meeting classification error:", err);
-    return { classified: 0, errors: events.length };
   }
+
+  for (const classification of classifications) {
+    const prepMinutes = clampPrepMinutes(
+      classification.prep_time_needed_minutes
+    );
+    const risks = [...classification.efficiency_risks];
+    if (
+      backToBackIds.has(classification.event_id) &&
+      !risks.includes("back_to_back")
+    ) {
+      risks.push("back_to_back");
+    }
+
+    // Check if there's a prep block before high-density meetings
+    let hasPrepBlock = false;
+    if (prepMinutes > 0) {
+      const event = events.find((e) => e.id === classification.event_id);
+      if (event) {
+        const eventStart = new Date(event.start_at);
+        const prepWindow = new Date(
+          eventStart.getTime() -
+            prepMinutes * 60 * 1000
+        );
+
+        const { count } = await supabase
+          .from("calendar_events")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", userId)
+          .gte("start_at", prepWindow.toISOString())
+          .lt("end_at", eventStart.toISOString());
+
+        hasPrepBlock = (count ?? 0) === 0; // No conflicts = prep block exists
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from("calendar_events")
+      .update({
+        decision_density: classification.decision_density,
+        ownership_load: classification.ownership_load,
+        efficiency_risks: risks,
+        prep_time_needed_minutes: prepMinutes,
+        has_prep_block: hasPrepBlock,
+      })
+      .eq("id", classification.event_id)
+      .eq("user_id", userId);
+
+    if (updateError) {
+      errors++;
+    } else {
+      classified++;
+    }
+  }
+
+  return { classified, errors };
 }

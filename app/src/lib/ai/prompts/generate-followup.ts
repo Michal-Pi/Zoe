@@ -36,7 +36,7 @@ export function buildFollowupPrompt(
       ? `Related context from emails and Slack (topics discussed before/around this meeting):\n${relatedSignals
           .map(
             (s) =>
-              `- [${s.topicCluster ?? "General"}] ${s.title ?? "(no title)"} (from ${s.senderName ?? "unknown"}, ${s.receivedAt})\n  ${s.snippet ?? ""}`
+              `- [${s.topicCluster ?? "General"}] ${s.title ?? "(no title)"} (from ${s.senderName ?? "unknown"}, ${s.receivedAt})\n  ${(s.snippet ?? "").slice(0, 150)}`
           )
           .join("\n")}`
       : "No related signals found. Generate a generic follow-up template with placeholders for discussion points.";

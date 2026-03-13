@@ -1,3 +1,7 @@
+// NOTE: This prompt is currently unused. Meeting classification was replaced by
+// deterministic heuristics in lib/scoring/deterministic-meeting-classifier.ts.
+// Kept for potential reuse in evaluation/comparison.
+
 interface MeetingForClassification {
   id: string;
   title: string;

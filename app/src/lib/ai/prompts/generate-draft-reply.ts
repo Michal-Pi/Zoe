@@ -21,12 +21,29 @@ export function buildDraftReplyPrompt(
       ? `The user's strategic priorities:\n${userPriorities.map((p, i) => `${i + 1}. ${p}`).join("\n")}`
       : "";
 
-  const threadSection = input.threadContext
-    ? `Previous messages in this thread:\n${input.threadContext}\n\n---`
+  // Truncate thread context to limit token usage
+  const MAX_THREAD_CHARS = 2000;
+  const truncatedThread = input.threadContext
+    ? input.threadContext.length > MAX_THREAD_CHARS
+      ? input.threadContext.slice(0, MAX_THREAD_CHARS) + "\n[... earlier messages truncated]"
+      : input.threadContext
+    : null;
+
+  const threadSection = truncatedThread
+    ? `Previous messages in this thread:\n${truncatedThread}\n\n---`
     : "";
 
-  const bodySection = input.body
-    ? `Full email body:\n${input.body}`
+  // Truncate body to limit Sonnet input tokens — most reply context
+  // is in the first ~1500 chars. Thread context provides the rest.
+  const MAX_BODY_CHARS = 1500;
+  const truncatedBody = input.body
+    ? input.body.length > MAX_BODY_CHARS
+      ? input.body.slice(0, MAX_BODY_CHARS) + "\n[... truncated]"
+      : input.body
+    : null;
+
+  const bodySection = truncatedBody
+    ? `Full email body:\n${truncatedBody}`
     : `Email snippet:\n${input.snippet ?? "(no content)"}`;
 
   return `You are Zoe, writing an email reply on behalf of a busy professional.
