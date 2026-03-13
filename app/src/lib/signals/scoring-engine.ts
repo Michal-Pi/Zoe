@@ -6,6 +6,31 @@ import { buildClusterPrompt } from "@/lib/ai/prompts/cluster-signals";
 import { buildActivityExtractionPrompt } from "@/lib/ai/prompts/extract-activities";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
+type ScoringSignal = {
+  id: string;
+  source: string;
+  source_type: string;
+  thread_id: string | null;
+  title: string | null;
+  snippet: string | null;
+  sender_name: string | null;
+  sender_email: string | null;
+  topic_cluster: string | null;
+  urgency_score: number | null;
+  ownership_signal: string | null;
+  requires_response: boolean | null;
+  escalation_level: string | null;
+  received_at: string;
+};
+
+type ExtractionWorkObject = {
+  id: string;
+  title: string;
+  description: string | null;
+  signalIds: string[];
+  sourceKey: string | null;
+};
+
 function clampRange(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -14,6 +39,67 @@ function clampRange(value: number, min: number, max: number): number {
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function getThreadSourceKey(signal: Pick<ScoringSignal, "source" | "thread_id">): string | null {
+  if (!signal.thread_id) return null;
+  if (signal.source !== "gmail" && signal.source !== "slack") return null;
+  return `${signal.source}:${signal.thread_id}`;
+}
+
+function buildThreadWorkObjectTitle(signals: ScoringSignal[]): string {
+  const latestSignal = [...signals].sort(
+    (a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime()
+  )[0];
+
+  if (latestSignal?.source === "gmail") {
+    return latestSignal.title?.trim() || latestSignal.topic_cluster?.trim() || "Email thread";
+  }
+
+  if (latestSignal?.source === "slack") {
+    const channelTitle = latestSignal.title?.trim();
+    const topic = latestSignal.topic_cluster?.trim();
+    return topic || channelTitle || "Slack thread";
+  }
+
+  return latestSignal?.title?.trim() || latestSignal?.topic_cluster?.trim() || "Work thread";
+}
+
+function buildThreadWorkObjectDescription(signals: ScoringSignal[]): string | null {
+  const latestSignal = [...signals].sort(
+    (a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime()
+  )[0];
+  const topic = latestSignal?.topic_cluster?.trim();
+  if (topic) return `Thread-backed work object for ${topic}.`;
+  if (latestSignal?.source === "gmail") return "Thread-backed work object for a Gmail conversation.";
+  if (latestSignal?.source === "slack") return "Thread-backed work object for a Slack conversation.";
+  return null;
+}
+
+function slugifyTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function buildActivityDedupeKey(
+  workObject: ExtractionWorkObject,
+  activity: {
+    title: string;
+    batch_key: string | null;
+  }
+): string {
+  if (workObject.sourceKey) {
+    return `thread:${workObject.id}`;
+  }
+
+  if (activity.batch_key) {
+    return `batch:${activity.batch_key}`;
+  }
+
+  return `activity:${workObject.id}:${slugifyTitle(activity.title)}`;
 }
 
 // Cluster classified signals into work objects, then extract scored activities
@@ -31,7 +117,7 @@ export async function runScoringEngine(userId: string): Promise<{
   const { data: unclustered, error: fetchErr } = await supabase
     .from("signals")
     .select(
-      "id, source, source_type, title, snippet, sender_name, sender_email, topic_cluster, urgency_score, ownership_signal, requires_response, escalation_level, received_at"
+      "id, source, source_type, thread_id, title, snippet, sender_name, sender_email, topic_cluster, urgency_score, ownership_signal, requires_response, escalation_level, received_at"
     )
     .eq("user_id", userId)
     .not("classified_at", "is", null)
@@ -62,7 +148,7 @@ export async function runScoringEngine(userId: string): Promise<{
   // 2. Fetch existing active work objects for this user
   const { data: existingWOs } = await supabase
     .from("work_objects")
-    .select("id, title")
+    .select("id, title, description, source_key, updated_at")
     .eq("user_id", userId)
     .eq("status", "active")
     .order("updated_at", { ascending: false })
@@ -70,16 +156,118 @@ export async function runScoringEngine(userId: string): Promise<{
 
   // 4. Upsert work objects and link signals
   let clustered = 0;
-  const workObjectsForExtraction: {
-    id: string;
-    title: string;
-    description: string | null;
-    signalIds: string[];
-  }[] = [];
+  const workObjectsForExtraction: ExtractionWorkObject[] = [];
+  const threadGroups = new Map<string, ScoringSignal[]>();
+  const nonThreadSignals: ScoringSignal[] = [];
 
-  if (newSignals.length) {
+  for (const signal of newSignals) {
+    const sourceKey = getThreadSourceKey(signal as ScoringSignal);
+    if (!sourceKey) {
+      nonThreadSignals.push(signal as ScoringSignal);
+      continue;
+    }
+
+    const current = threadGroups.get(sourceKey) ?? [];
+    current.push(signal as ScoringSignal);
+    threadGroups.set(sourceKey, current);
+  }
+
+  const existingWorkObjectsBySourceKey = new Map(
+    (existingWOs ?? [])
+      .filter((workObject) => Boolean(workObject.source_key))
+      .map((workObject) => [workObject.source_key as string, workObject])
+  );
+
+  for (const [sourceKey, threadSignals] of threadGroups.entries()) {
+    const title = buildThreadWorkObjectTitle(threadSignals);
+    const description = buildThreadWorkObjectDescription(threadSignals);
+    const latestSignalAt = threadSignals.reduce((latest, signal) => {
+      return new Date(signal.received_at) > new Date(latest) ? signal.received_at : latest;
+    }, threadSignals[0].received_at);
+
+    let workObjectId = existingWorkObjectsBySourceKey.get(sourceKey)?.id ?? null;
+
+    if (!workObjectId) {
+      const { data: createdWorkObject, error: createErr } = await supabase
+        .from("work_objects")
+        .insert({
+          user_id: userId,
+          title,
+          description,
+          signal_count: threadSignals.length,
+          latest_signal_at: latestSignalAt,
+          source_key: sourceKey,
+        })
+        .select("id")
+        .single();
+
+      if (createErr || !createdWorkObject) {
+        errors++;
+        errorDetails.push(
+          `thread work object create failed for "${sourceKey}": ${getErrorMessage(createErr)}`
+        );
+        continue;
+      }
+
+      workObjectId = createdWorkObject.id;
+    } else {
+      await supabase
+        .from("work_objects")
+        .update({
+          title,
+          description,
+          latest_signal_at: latestSignalAt,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", workObjectId);
+    }
+
+    const links = threadSignals.map((signal) => ({
+      work_object_id: workObjectId,
+      signal_id: signal.id,
+    }));
+
+    const { error: linkErr } = await supabase
+      .from("work_object_signals")
+      .upsert(links, { onConflict: "work_object_id,signal_id" });
+
+    if (linkErr) {
+      errors++;
+      errorDetails.push(
+        `thread work object link failed for ${sourceKey}: ${getErrorMessage(linkErr)}`
+      );
+      continue;
+    }
+
+    const { count: signalCount } = await supabase
+      .from("work_object_signals")
+      .select("signal_id", { count: "exact", head: true })
+      .eq("work_object_id", workObjectId);
+
+    await supabase
+      .from("work_objects")
+      .update({
+        signal_count: signalCount ?? threadSignals.length,
+        latest_signal_at: latestSignalAt,
+      })
+      .eq("id", workObjectId);
+
+    clustered += threadSignals.length;
+    workObjectsForExtraction.push({
+      id: workObjectId,
+      title,
+      description,
+      signalIds: threadSignals.map((signal) => signal.id),
+      sourceKey,
+    });
+  }
+
+  const existingNonThreadWOs =
+    existingWOs?.filter((workObject) => !workObject.source_key) ?? [];
+
+  if (nonThreadSignals.length) {
     const clusterPrompt = buildClusterPrompt(
-      newSignals.map((s) => ({
+      nonThreadSignals.map((s) => ({
         id: s.id,
         source: s.source,
         sourceType: s.source_type,
@@ -93,7 +281,10 @@ export async function runScoringEngine(userId: string): Promise<{
         requiresResponse: s.requires_response,
         receivedAt: s.received_at,
       })),
-      existingWOs ?? []
+      existingNonThreadWOs.map((workObject) => ({
+        id: workObject.id,
+        title: workObject.title,
+      }))
     );
 
     let clusterResult;
@@ -108,7 +299,7 @@ export async function runScoringEngine(userId: string): Promise<{
       const message = `clustering failed: ${getErrorMessage(err)}`;
       console.error("Clustering error:", {
         userId,
-        signalIds: newSignals.map((signal) => signal.id),
+        signalIds: nonThreadSignals.map((signal) => signal.id),
         error: getErrorMessage(err),
       });
       return {
@@ -120,7 +311,7 @@ export async function runScoringEngine(userId: string): Promise<{
     }
 
     for (const cluster of clusterResult.clusters) {
-      const existingMatch = existingWOs?.find(
+      const existingMatch = existingNonThreadWOs.find(
         (wo) => cluster.title.toLowerCase() === wo.title.toLowerCase()
       );
 
@@ -186,6 +377,7 @@ export async function runScoringEngine(userId: string): Promise<{
         title: cluster.title,
         description: cluster.description,
         signalIds: cluster.signal_ids,
+        sourceKey: null,
       });
     }
   }
@@ -209,7 +401,7 @@ export async function runScoringEngine(userId: string): Promise<{
 
   const extractionCandidates = new Map<
     string,
-    { id: string; title: string; description: string | null; signalIds: string[] }
+    ExtractionWorkObject
   >();
 
   for (const workObject of workObjectsForExtraction) {
@@ -240,6 +432,7 @@ export async function runScoringEngine(userId: string): Promise<{
         title: workObject.title,
         description: null,
         signalIds,
+        sourceKey: null,
       });
     }
   }
@@ -315,6 +508,50 @@ export async function runScoringEngine(userId: string): Promise<{
       prompt: extractionPrompt,
     });
 
+    const existingActiveActivitiesByDedupeKey = new Map<string, { id: string; status: string }>();
+    const dedupeCandidates = object.activities
+      .map((activity) => {
+        const matchedWorkObject = woForExtraction.find(
+          (wo) =>
+            activity.batch_key === wo.id ||
+            wo.title.toLowerCase().includes(activity.title.toLowerCase().slice(0, 20)) ||
+            activity.title.toLowerCase().includes(wo.title.toLowerCase().slice(0, 20))
+        );
+
+        if (!matchedWorkObject) return null;
+
+        return buildActivityDedupeKey(
+          {
+            id: matchedWorkObject.id,
+            title: matchedWorkObject.title,
+            description: matchedWorkObject.description,
+            signalIds: [],
+            sourceKey:
+              extractionWorkObjects.find((candidate) => candidate.id === matchedWorkObject.id)
+                ?.sourceKey ?? null,
+          },
+          activity
+        );
+      })
+      .filter((value): value is string => Boolean(value));
+
+    if (dedupeCandidates.length) {
+      const { data: existingActivities } = await supabase
+        .from("activities")
+        .select("id, dedupe_key, status")
+        .eq("user_id", userId)
+        .in("status", ["pending", "in_progress", "snoozed"])
+        .in("dedupe_key", Array.from(new Set(dedupeCandidates)));
+
+      for (const activity of existingActivities ?? []) {
+        if (!activity.dedupe_key) continue;
+        existingActiveActivitiesByDedupeKey.set(activity.dedupe_key, {
+          id: activity.id,
+          status: activity.status,
+        });
+      }
+    }
+
     // Insert activities — match to correct work object by batch_key or title
     for (const activity of object.activities) {
       const matchedWO = woForExtraction.find(
@@ -323,9 +560,21 @@ export async function runScoringEngine(userId: string): Promise<{
           wo.title.toLowerCase().includes(activity.title.toLowerCase().slice(0, 20)) ||
           activity.title.toLowerCase().includes(wo.title.toLowerCase().slice(0, 20))
       );
-      const { error: insertErr } = await supabase.from("activities").insert({
-        user_id: userId,
-        work_object_id: matchedWO?.id ?? woForExtraction[0]?.id ?? null,
+      const resolvedWO =
+        extractionWorkObjects.find((candidate) => candidate.id === matchedWO?.id) ??
+        extractionWorkObjects[0];
+
+      if (!resolvedWO) {
+        errors++;
+        errorDetails.push(
+          `activity resolution failed for "${activity.title}": no work object matched`
+        );
+        continue;
+      }
+
+      const dedupeKey = buildActivityDedupeKey(resolvedWO, activity);
+      const activityPayload = {
+        work_object_id: resolvedWO?.id ?? null,
         title: activity.title,
         description: activity.description,
         time_estimate_minutes: clampRange(activity.time_estimate_minutes, 1, 480),
@@ -346,16 +595,47 @@ export async function runScoringEngine(userId: string): Promise<{
         deadline_at: activity.deadline_at,
         batch_key: activity.batch_key,
         batch_label: activity.batch_label,
+        dedupe_key: dedupeKey,
         scored_at: new Date().toISOString(),
-      });
+      };
 
-      if (insertErr) {
+      const existingActivity = existingActiveActivitiesByDedupeKey.get(dedupeKey);
+      if (existingActivity) {
+        const { error: updateErr } = await supabase
+          .from("activities")
+          .update(activityPayload)
+          .eq("id", existingActivity.id)
+          .eq("user_id", userId);
+
+        if (updateErr) {
+          errors++;
+          errorDetails.push(
+            `activity update failed for "${activity.title}": ${getErrorMessage(updateErr)}`
+          );
+        }
+        continue;
+      }
+
+      const { data: insertedActivity, error: insertErr } = await supabase
+        .from("activities")
+        .insert({
+          user_id: userId,
+          ...activityPayload,
+        })
+        .select("id")
+        .single();
+
+      if (insertErr || !insertedActivity) {
         errors++;
         errorDetails.push(
           `activity insert failed for "${activity.title}": ${getErrorMessage(insertErr)}`
         );
       } else {
         activitiesCreated++;
+        existingActiveActivitiesByDedupeKey.set(dedupeKey, {
+          id: insertedActivity.id,
+          status: "pending",
+        });
       }
     }
   } catch (err) {
