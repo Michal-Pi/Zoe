@@ -1,10 +1,7 @@
-import { generateObject } from "ai";
-import { models } from "@/lib/ai/providers";
-import { clusterResultSchema } from "@/lib/ai/schemas/scoring";
-import { buildClusterPrompt } from "@/lib/ai/prompts/cluster-signals";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { logLLMUsage } from "@/lib/monitoring/llm-costs";
 import { createActivitiesFromWorkObjects } from "@/lib/scoring/deterministic-activities";
+import { clusterSignalsDeterministically } from "@/lib/scoring/deterministic-clustering";
 
 const MAX_EXTRACTION_ATTEMPTS = 3;
 
@@ -279,15 +276,17 @@ export async function runScoringEngine(userId: string): Promise<{
     existingWOs?.filter((workObject) => !workObject.source_key) ?? [];
 
   if (nonThreadSignals.length) {
-    const clusterPrompt = buildClusterPrompt(
+    // Deterministic clustering by topic_cluster — no LLM call
+    const deterministicClusters = clusterSignalsDeterministically(
       nonThreadSignals.map((s) => ({
         id: s.id,
         source: s.source,
-        sourceType: s.source_type,
+        source_type: s.source_type,
         title: s.title,
         snippet: s.snippet,
-        senderName: s.sender_name,
-        receivedAt: s.received_at,
+        sender_name: s.sender_name,
+        topic_cluster: s.topic_cluster,
+        received_at: s.received_at,
       })),
       existingNonThreadWOs.map((workObject) => ({
         id: workObject.id,
@@ -295,43 +294,25 @@ export async function runScoringEngine(userId: string): Promise<{
       }))
     );
 
-    let clusterResult;
-    try {
-      const { object, usage: clusterUsage } = await generateObject({
-        model: models.fast,
-        schema: clusterResultSchema,
-        prompt: clusterPrompt,
-      });
-      clusterResult = object;
-      if (clusterUsage) {
-        logLLMUsage({
-          model: "claude-haiku-4-5-latest",
-          operation: "cluster_signals",
-          inputTokens: clusterUsage.inputTokens ?? 0,
-          outputTokens: clusterUsage.outputTokens ?? 0,
-          userId,
-          metadata: { signalCount: nonThreadSignals.length },
-        });
-      }
-    } catch (err) {
-      const message = `clustering failed: ${getErrorMessage(err)}`;
-      console.error("Clustering error:", {
-        userId,
-        signalIds: nonThreadSignals.map((signal) => signal.id),
-        error: getErrorMessage(err),
-      });
-      return {
-        clustered: 0,
-        activitiesCreated: 0,
-        errors: 1,
-        errorDetails: [message],
-      };
-    }
+    logLLMUsage({
+      model: "heuristic",
+      operation: "cluster_deterministic",
+      inputTokens: 0,
+      outputTokens: 0,
+      userId,
+      metadata: {
+        signalCount: nonThreadSignals.length,
+        clusterCount: deterministicClusters.length,
+        skippedLLM: true,
+      },
+    });
 
-    for (const cluster of clusterResult.clusters) {
-      const existingMatch = existingNonThreadWOs.find(
-        (wo) => cluster.title.toLowerCase() === wo.title.toLowerCase()
-      );
+    for (const cluster of deterministicClusters) {
+      const existingMatch = cluster.matched_work_object_id
+        ? existingNonThreadWOs.find((wo) => wo.id === cluster.matched_work_object_id)
+        : existingNonThreadWOs.find(
+            (wo) => cluster.title.toLowerCase() === wo.title.toLowerCase()
+          );
 
       let workObjectId: string;
 

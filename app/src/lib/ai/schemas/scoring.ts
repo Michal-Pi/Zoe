@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// NOTE: This schema is currently unused. Clustering was replaced by
+// deterministic topic_cluster grouping in lib/scoring/deterministic-clustering.ts.
+// Kept for potential reuse in Phase 6 (full-context review route).
 export const clusterResultSchema = z.object({
   clusters: z.array(
     z.object({

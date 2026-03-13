@@ -1,3 +1,7 @@
+// NOTE: This prompt is currently unused. Clustering was replaced by
+// deterministic topic_cluster grouping in lib/scoring/deterministic-clustering.ts.
+// Kept for potential reuse in Phase 6 (full-context review route).
+
 interface SignalForClustering {
   id: string;
   source: string;
