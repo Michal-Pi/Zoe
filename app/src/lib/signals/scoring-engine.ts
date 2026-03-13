@@ -41,6 +41,15 @@ function getErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "23505"
+  );
+}
+
 function getThreadSourceKey(signal: Pick<ScoringSignal, "source" | "thread_id">): string | null {
   if (!signal.thread_id) return null;
   if (signal.source !== "gmail" && signal.source !== "slack") return null;
@@ -624,6 +633,40 @@ export async function runScoringEngine(userId: string): Promise<{
         })
         .select("id")
         .single();
+
+      if (insertErr && isUniqueViolation(insertErr)) {
+        const { data: concurrentActivity } = await supabase
+          .from("activities")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("dedupe_key", dedupeKey)
+          .in("status", ["pending", "in_progress", "snoozed"])
+          .limit(1)
+          .single();
+
+        if (concurrentActivity) {
+          const { error: recoveryUpdateErr } = await supabase
+            .from("activities")
+            .update(activityPayload)
+            .eq("id", concurrentActivity.id)
+            .eq("user_id", userId);
+
+          if (recoveryUpdateErr) {
+            errors++;
+            errorDetails.push(
+              `activity recovery update failed for "${activity.title}": ${getErrorMessage(
+                recoveryUpdateErr
+              )}`
+            );
+          } else {
+            existingActiveActivitiesByDedupeKey.set(dedupeKey, {
+              id: concurrentActivity.id,
+              status: "pending",
+            });
+          }
+          continue;
+        }
+      }
 
       if (insertErr || !insertedActivity) {
         errors++;
